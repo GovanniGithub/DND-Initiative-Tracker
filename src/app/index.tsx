@@ -1,5 +1,5 @@
 import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
+import { Platform, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AnimatedIcon } from '@/components/animated-icon';
@@ -35,13 +35,29 @@ export default function HomeScreen() {
         <ThemedView style={styles.heroSection}>
           <AnimatedIcon />
           <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
+            Some website Name
           </ThemedText>
         </ThemedView>
 
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
+        <Pressable 
+          onPress={() => console.log('Campaigns clicked')}
+          style={({ pressed }) => [
+            styles.menuButton,
+            pressed && styles.menuButtonPressed,
+           ]}
+        >
+          <ThemedText style={styles.menuButtonText}>Campaigns</ThemedText>
+        </Pressable>
+
+        <Pressable 
+          onPress={() => console.log('Settings clicked')}
+          style={({ pressed }) => [
+            styles.menuButton,
+            pressed && styles.menuButtonPressed,
+           ]}
+          >
+          <ThemedText style={styles.menuButtonText}>Settings</ThemedText>
+        </Pressable>
 
         <ThemedView type="backgroundElement" style={styles.stepContainer}>
           <HintRow
@@ -94,5 +110,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.four,
     borderRadius: Spacing.four,
+  },
+    menuButton: {
+    width: '100%',
+    maxWidth: 340,
+    paddingVertical: 18,
+    alignItems: 'center',
+    backgroundColor: '#171C25',
+    borderWidth: 2,
+    borderColor: '#C9A45C',
+    borderRadius: 12,
+  },
+  menuButtonPressed: {
+    transform: [{ scale: 0.97 }],
+    backgroundColor: '#302719',
+  },
+  menuButtonText: {
+    color: '#F5DEAA',
+    fontSize: 24,
+    fontWeight: '600',
   },
 });
