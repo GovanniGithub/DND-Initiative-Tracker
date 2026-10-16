@@ -1,101 +1,150 @@
-import * as Device from 'expo-device';
-import { useRef } from 'react';
-import { Animated, Image, Platform, Pressable, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-
-import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Spacing } from '@/constants/theme';
+import { useRef } from 'react';
+import {
+  Animated,
+  Image,
+  ImageBackground,
+  Pressable,
+  Platform,
+  StyleSheet,
+  useWindowDimensions,
+} from 'react-native';
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
-  return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
-function GlowButton({label}: {label: string}) {
+function GlowButton({
+  label,
+  position,
+}: {
+  label: string;
+  position: 'campaigns' | 'settings';
+}) {
   const glow = useRef(new Animated.Value(0)).current;
+  const pressScale = useRef(new Animated.Value(1)).current;
+  const isHovered = useRef(false);
+  const isPressed = useRef(false);
 
-  function fadeGlow(value: number){
+  function fadeGlow(value: number) {
     Animated.timing(glow, {
       toValue: value,
       duration: 100,
-      useNativeDriver: false,
+      useNativeDriver: Platform.OS !== 'web',
+    }).start();
+  }
+
+  function animatePress(value: number) {
+    if (value < 1) {
+      Animated.timing(pressScale, {
+        toValue: value,
+        duration: 80,
+        useNativeDriver: Platform.OS !== 'web',
+      }).start();
+      return;
+    }
+
+    Animated.spring(pressScale, {
+      toValue: 1,
+      useNativeDriver: Platform.OS !== 'web',
+      speed: 20,
+      bounciness: 6,
     }).start();
   }
 
   return (
     <Pressable
       accessibilityRole="button"
-      onHoverIn={() => fadeGlow(1)}
-      onHoverOut={() => fadeGlow(0)}
-      onFocus={() => fadeGlow(1)}
-      onBlur={() => fadeGlow(0)}
-      onPressIn={() => fadeGlow(1)}
-      onPressOut={() => fadeGlow(0)}
+      accessibilityLabel={label}
+      onHoverIn={() => {
+        isHovered.current = true;
+        fadeGlow(1);
+      }}
+      onHoverOut={() => {
+        isHovered.current = false;
+        if (!isPressed.current) fadeGlow(0);
+      }}
+      onPressIn={() => {
+        isPressed.current = true;
+        fadeGlow(1);
+        animatePress(0.96);
+      }}
+      onPressOut={() => {
+        isPressed.current = false;
+        fadeGlow(isHovered.current ? 1 : 0);
+        animatePress(1);
+      }}
       onPress={() => console.log(`${label} clicked`)}
-      style={styles.menuButton}
+      style={[styles.menuButton, styles[position]]}
     >
       <Animated.View
-        pointerEvents="none"
-        style={[styles.buttonGlow, { opacity: glow }]}
-      />
-
-      <Animated.Text
         style={[
-          styles.menuButtonText,
+          styles.hoverArtwork,
           {
-            textShadowColor: '#FFBD59',
-            textShadowOffset: { width: 0, height: 0 },
-            textShadowRadius: glow.interpolate({
+            opacity: glow.interpolate({
               inputRange: [0, 1],
-              outputRange: [0, 10],
+              outputRange: [0, 0.45],
             }),
           },
-        ]}>
-        {label}
-      </Animated.Text>
+        ]}
+      >
+        <Image
+          source={
+            position === 'campaigns'
+              ? require('../../assets/images/campaigns-button-glow.png')
+              : require('../../assets/images/settings-button-glow.png')
+          }
+          resizeMode="stretch"
+          style={styles.fillImage}
+        />
+      </Animated.View>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.hoverLabel,
+          styles[`${position}Label`],
+          {
+            transform: [
+              {
+                scale: glow.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 1.045],
+                }),
+              },
+              { scale: pressScale },
+            ],
+          },
+        ]}
+      >
+        <Image
+          source={
+            position === 'campaigns'
+              ? require('../../assets/images/campaigns-label.png')
+              : require('../../assets/images/settings-label.png')
+          }
+          resizeMode="stretch"
+          style={styles.fillImage}
+        />
+      </Animated.View>
     </Pressable>
   );
 }
 
 export default function HomeScreen() {
+  const { height, width } = useWindowDimensions();
+  const artworkAspectRatio = 941 / 1672;
+  const artworkWidth = Math.min(width, height * artworkAspectRatio);
+  const artworkHeight = artworkWidth / artworkAspectRatio;
+
   return (
     <ThemedView style={styles.container}>
-      <Animated.View
-          pointerEvents="none"
-          style={styles.pageFrame}
-      />
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          
-          <ThemedText type="title" style={styles.title}>
-            Initiative Tracker
-          </ThemedText>
-          
-          <Image 
-            source={require('../../assets/images/dragons-d20.png')}
-            style={styles.dragonImage}
-            resizeMode="contain"
-          />
-        </ThemedView>
-
-        <GlowButton label="Campaigns" />
-        <GlowButton label="Settings" />
-
-      </SafeAreaView>
+      <ImageBackground
+        source={require('../../assets/images/menu-home-background.png')}
+        resizeMode="contain"
+        style={{
+          width: artworkWidth,
+          height: artworkHeight,
+        }}
+      >
+        <GlowButton label="Campaigns" position="campaigns" />
+        <GlowButton label="Settings" position="settings" />
+      </ImageBackground>
     </ThemedView>
   );
 }
@@ -103,89 +152,45 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#080F18',
-    justifyContent: 'center',
-    flexDirection: 'row',
-  },
-  safeArea: {
-    flex: 1,
-    width: '100%',
-    maxWidth: 600,
-    paddingHorizontal: 24,
-    paddingVertical: 40,
+    backgroundColor: '#030A12',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 24,
   },
-  heroSection: {
+  menuButton: {
+    position: 'absolute',
+  },
+  campaigns: {
+    left: '10.2%',
+    right: '10.1%',
+    top: '55.32%',
+    height: '10.89%',
+  },
+  settings: {
+    left: '12.33%',
+    right: '12.86%',
+    top: '67.88%',
+    height: '9.87%',
+  },
+  hoverArtwork: {
+    ...StyleSheet.absoluteFill,
+  },
+  fillImage: {
     width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'transparent',
-    gap: 24,
+    height: '100%',
   },
-  title: {
-    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
-    textAlign: 'center',
-    color: '#F5DEAA',
-    lineHeight: 44,
-    fontSize: 36,
+  hoverLabel: {
+    position: 'absolute',
   },
-  code: {
-    textTransform: 'uppercase',
+  campaignsLabel: {
+    left: '26%',
+    top: '28.57%',
+    width: '49.33%',
+    height: '49.45%',
   },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
+  settingsLabel: {
+    left: '34.23%',
+    top: '29.7%',
+    width: '32.95%',
+    height: '47.88%',
   },
-    menuButton: {
-    width: '100%',
-    maxWidth: 340,
-    paddingVertical: 18,
-    alignItems: 'center',
-    backgroundColor: '#171C25',
-    borderWidth: 2,
-    borderColor: '#C9A45C',
-    borderRadius: 12,
-  },
-  menuButtonPressed: {
-    transform: [{ scale: 0.97 }],
-    backgroundColor: '#302719',
-  },
-  menuButtonText: {
-    color: '#F5DEAA',
-    fontSize: 24,
-    fontWeight: '600',
-    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
-  },
-  dragonImage: {
-    width: '100%',
-    maxWidth: 500,
-    height: 240,
-    alignSelf: 'center',
-  },
-  buttonGlow: {
-  ...StyleSheet.absoluteFillObject,
-  borderRadius: 10,
-  borderWidth: 1,
-  borderColor: '#FFE0A0',
-  backgroundColor: 'rgba(218, 146, 40, 0.12)',
-  shadowColor: '#FFB640',
-  shadowOffset: { width: 0, height: 0 },
-  shadowOpacity: 0.8,
-  shadowRadius: 12,
-},
-pageFrame: {
-  position: 'absolute',
-  top: 16,
-  bottom: 16,
-  left: 16,
-  right: 16,
-  borderWidth: 1,
-  borderColor: '#C9A45C',
-  borderRadius: 16,
-},
 });
