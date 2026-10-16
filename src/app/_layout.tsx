@@ -19,6 +19,14 @@ export default function TabLayout() {
             animationDuration: 250,
           }}
         />
+        <Stack.Screen
+          name="campaign/[id]"
+          options={{
+            presentation: 'fullScreenModal',
+            animation: 'none',
+            contentStyle: { backgroundColor: '#030A12' },
+          }}
+        />
       </Stack>
     </ThemeProvider>
   );

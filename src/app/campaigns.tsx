@@ -5,6 +5,7 @@ import {
   setCampaignFavorite,
   type Campaign,
 } from '@/storage/campaigns';
+import { CAMPAIGN_COVERS, getCampaignCoverSource } from '@/constants/campaign-covers';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
@@ -22,45 +23,6 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import type { ImageSourcePropType } from 'react-native';
-
-const CAMPAIGN_COVERS: { id: string; name: string; source: ImageSourcePropType }[] = [
-  {
-    id: 'sunlit-bay',
-    name: 'Sunlit Bay',
-    source: require('../../assets/images/campaign-cover-sunlit-bay.jpg'),
-  },
-  {
-    id: 'desert-ruins',
-    name: 'Desert Ruins',
-    source: require('../../assets/images/campaign-cover-desert-ruins.jpg'),
-  },
-  {
-    id: 'rosecourt',
-    name: 'Rosecourt',
-    source: require('../../assets/images/campaign-cover-rosecourt.jpg'),
-  },
-  {
-    id: 'moonlit-forest',
-    name: 'Moonlit Forest',
-    source: require('../../assets/images/campaign-cover-moonlit-forest.jpg'),
-  },
-  {
-    id: 'haunted-city',
-    name: 'Haunted City',
-    source: require('../../assets/images/campaign-cover-haunted-city.jpg'),
-  },
-  {
-    id: 'frozen-fortress',
-    name: 'Frozen Fortress',
-    source: require('../../assets/images/campaign-cover-frozen-fortress.jpg'),
-  },
-];
-
-function getCampaignCover(campaign: Campaign): ImageSourcePropType | null {
-  if (campaign.coverUri) return { uri: campaign.coverUri };
-  return CAMPAIGN_COVERS.find((cover) => cover.id === campaign.coverId)?.source ?? null;
-}
 
 export default function CampaignsScreen() {
   const { height, width } = useWindowDimensions();
@@ -257,29 +219,42 @@ export default function CampaignsScreen() {
                 {[...campaigns]
                   .sort((left, right) => Number(right.favorite) - Number(left.favorite))
                   .map((campaign) => {
-                    const coverSource = getCampaignCover(campaign);
+                    const coverSource = getCampaignCoverSource(campaign.coverId, campaign.coverUri);
                     return (
                       <View key={campaign.id} style={styles.campaignCard}>
-                        {coverSource ? (
-                          <Image
-                            accessibilityLabel={`${campaign.name} cover`}
-                            resizeMode="cover"
-                            source={coverSource}
-                            style={styles.campaignCover}
-                          />
-                        ) : (
-                          <View style={[styles.campaignCover, styles.emptyCampaignCover]}>
-                            <Text style={styles.emptyCoverText}>D20</Text>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open ${campaign.name}`}
+                          onPress={() =>
+                            router.push({
+                              pathname: '/campaign/[id]',
+                              params: { id: campaign.id },
+                            })
+                          }
+                          style={styles.campaignMain}
+                        >
+                          {coverSource ? (
+                            <Image
+                              accessibilityLabel={`${campaign.name} cover`}
+                              resizeMode="cover"
+                              source={coverSource}
+                              style={styles.campaignCover}
+                            />
+                          ) : (
+                            <View style={[styles.campaignCover, styles.emptyCampaignCover]}>
+                              <Text style={styles.emptyCoverText}>D20</Text>
+                            </View>
+                          )}
+                          <View style={styles.campaignDetails}>
+                            <Text style={styles.campaignName}>
+                              {campaign.name}
+                            </Text>
+                            <Text style={styles.characterCount}>
+                              {campaign.favorite ? '★  ' : ''}
+                              {campaign.characters?.length ?? 0} characters
+                            </Text>
                           </View>
-                        )}
-                        <View style={styles.campaignDetails}>
-                          <Text style={styles.campaignName}>
-                            {campaign.name}
-                          </Text>
-                          <Text style={styles.characterCount}>
-                            {campaign.favorite ? '★  ' : ''}0 characters
-                          </Text>
-                        </View>
+                        </Pressable>
                         <Pressable
                           accessibilityRole="button"
                           accessibilityLabel={`More options for ${campaign.name}`}
@@ -556,6 +531,12 @@ const styles = StyleSheet.create({
     paddingRight: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: 'rgba(196, 151, 76, 0.55)',
+  },
+  campaignMain: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   campaignCover: {
     width: 92,
