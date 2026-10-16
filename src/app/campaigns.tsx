@@ -197,7 +197,7 @@ export default function CampaignsScreen() {
         />
         <Pressable
           accessibilityRole="button"
-          onPress={() => router.push('/lobby')}
+          onPress={() => router.push({ pathname: '/lobby', params: { join: '1' } })}
           style={styles.joinLobbyButton}
         >
           <Text style={styles.joinLobbyButtonText}>Join Online Lobby</Text>

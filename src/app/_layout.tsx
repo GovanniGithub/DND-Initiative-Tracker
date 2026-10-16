@@ -29,8 +29,8 @@ export default function TabLayout() {
         <Stack.Screen
           name="campaign/[id]"
           options={{
-            presentation: 'fullScreenModal',
-            animation: 'none',
+            presentation: 'card',
+            animation: 'slide_from_right',
             contentStyle: { backgroundColor: '#030A12' },
           }}
         />

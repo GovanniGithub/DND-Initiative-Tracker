@@ -7,3 +7,22 @@
   --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
 }
+
+#online-lobby-scroll {
+  scrollbar-color: #80663d #07111b;
+  scrollbar-width: thin;
+}
+
+#online-lobby-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+#online-lobby-scroll::-webkit-scrollbar-track {
+  background: #07111b;
+}
+
+#online-lobby-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid #07111b;
+  border-radius: 8px;
+  background: #80663d;
+}

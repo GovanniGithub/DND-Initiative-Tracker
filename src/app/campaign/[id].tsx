@@ -5,20 +5,18 @@ import {
   deleteCampaignCharacter,
   deleteCampaignEncounter,
   endCampaignCombat,
-  getCampaignInitiativeKey,
   loadCampaigns,
-  resetCampaignEncounterInitiative,
   saveCampaignCustomEnemyPreset,
-  saveCampaignEncounterInitiative,
   saveCampaignEncounter,
   setCampaignCharacterStatus,
-  startCampaignCombat,
   updateCampaignCombatantHp,
+  updateCampaignCharacterArmorClass,
   updateCampaignCharacterInitiative,
   type Campaign,
   type CampaignCharacter,
   type CampaignCombatAlly,
   type CampaignCustomEnemyPreset,
+  type CampaignEncounterBackgroundId,
   type CampaignEncounterEnemyInput,
   type CampaignEncounter,
 } from '@/storage/campaigns';
@@ -27,6 +25,10 @@ import {
   closeOnlineCombatLobby,
   createOnlineCombatLobby,
   loadOnlineLobbySnapshot,
+  resetDmInitiative,
+  restoreLastOnlineLobby,
+  startOnlineCombat,
+  submitDmInitiative,
   subscribeToOnlineCombatLobby,
   type OnlineLobbySnapshot,
 } from '@/storage/online-lobbies';
@@ -38,6 +40,7 @@ import {
 import Slider from '@react-native-community/slider';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
+import { SymbolView } from 'expo-symbols';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -56,6 +59,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type CampaignTab = 'Party' | 'Encounters' | 'Graveyard' | 'History';
 const CAMPAIGN_TABS: CampaignTab[] = ['Party', 'Encounters', 'Graveyard', 'History'];
@@ -129,6 +133,42 @@ const ENCOUNTER_ARTWORK = [
   require('../../../assets/images/campaign-cover-haunted-city.jpg'),
   require('../../../assets/images/campaign-cover-desert-ruins.jpg'),
   require('../../../assets/images/campaign-cover-sunlit-bay.jpg'),
+];
+const COMBAT_BACKGROUND_PRESETS: {
+  id: CampaignEncounterBackgroundId;
+  name: string;
+  source: ImageSourcePropType;
+}[] = [
+  {
+    id: 'haunted-city',
+    name: 'Haunted City',
+    source: require('../../../assets/images/Haunted city under violet moonlight-6.png'),
+  },
+  {
+    id: 'moonlit-forest',
+    name: 'Moonlit Forest',
+    source: require('../../../assets/images/Moonlit Enchanted Forest-3.png'),
+  },
+  {
+    id: 'frozen-fortress',
+    name: 'Frozen Fortress',
+    source: require('../../../assets/images/Fortress Beneath the Frozen Peaks-4.png'),
+  },
+  {
+    id: 'desert-ruins',
+    name: 'Desert Ruins',
+    source: require('../../../assets/images/Turquoise Light in Desert Ruins-5.png'),
+  },
+  {
+    id: 'rose-castle',
+    name: 'Rosecourt Castle',
+    source: require('../../../assets/images/Rosecourt Castle at Sunset-2.png'),
+  },
+  {
+    id: 'sunlit-harbor',
+    name: 'Sunlit Harbor',
+    source: require('../../../assets/images/Turquoise Bay and Sunlit Harbor-1.png'),
+  },
 ];
 const ENEMY_PRESETS = [
   {
@@ -227,9 +267,13 @@ type EnemyForm = {
   name: string;
   imageId: string;
   imageUri?: string;
+  armorClass: string;
   quantity: string;
   initiative: string;
   initiativeMode: 'individual' | 'horde';
+  arrivalMode: 'round' | 'dm';
+  arrivalRound: string;
+  arrivalNote: string;
   maxHp: string;
 };
 
@@ -251,9 +295,38 @@ type InitiativeEntry = {
   race?: string;
   portraitUri?: string | null;
   portraitPresetId?: string;
+  imageId?: string;
+  armorClass?: number;
   maxHp?: number;
   currentHp?: number;
 };
+
+function CombatIcon({
+  name,
+  size = 18,
+  color = '#E8B95F',
+}: {
+  name: 'arrow.left' | 'arrow.right' | 'checkmark' | 'ellipsis' | 'minus' | 'plus';
+  size?: number;
+  color?: string;
+}) {
+  const androidNames = {
+    'arrow.left': 'arrow_back',
+    'arrow.right': 'arrow_forward',
+    checkmark: 'check',
+    ellipsis: 'more_horiz',
+    minus: 'remove',
+    plus: 'add',
+  } as const;
+  return (
+    <SymbolView
+      name={{ ios: name, android: androidNames[name], web: androidNames[name] }}
+      size={size}
+      tintColor={color}
+      weight="medium"
+    />
+  );
+}
 
 function getCharacterPortraitSource(
   portraitPresetId?: string,
@@ -314,10 +387,8 @@ function CharacterPresetPicker({
 
 export default function CampaignDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { height, width } = useWindowDimensions();
-  const artworkAspectRatio = 941 / 1672;
-  const artworkWidth = Math.min(width, height * artworkAspectRatio);
-  const artworkHeight = artworkWidth / artworkAspectRatio;
+  const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [activeTab, setActiveTab] = useState<CampaignTab>('Party');
   const [isLoading, setIsLoading] = useState(true);
@@ -328,6 +399,7 @@ export default function CampaignDetailScreen() {
   const [characterName, setCharacterName] = useState('');
   const [characterRace, setCharacterRace] = useState('');
   const [characterClass, setCharacterClass] = useState('');
+  const [characterArmorClass, setCharacterArmorClass] = useState('10');
   const [characterInitiative, setCharacterInitiative] = useState(0);
   const [initiativeSliderKey, setInitiativeSliderKey] = useState(0);
   const [characterPortraitUri, setCharacterPortraitUri] = useState<string | null>(null);
@@ -338,26 +410,31 @@ export default function CampaignDetailScreen() {
   const [isCharacterMenuVisible, setIsCharacterMenuVisible] = useState(false);
   const [isEditingInitiative, setIsEditingInitiative] = useState(false);
   const [editedInitiative, setEditedInitiative] = useState(0);
+  const [isEditingArmorClass, setIsEditingArmorClass] = useState(false);
+  const [editedArmorClass, setEditedArmorClass] = useState('10');
   const [isCharacterDeleteConfirmVisible, setIsCharacterDeleteConfirmVisible] = useState(false);
   const [isUpdatingCharacter, setIsUpdatingCharacter] = useState(false);
   const [isCombatModalVisible, setIsCombatModalVisible] = useState(false);
   const [isUpdatingCombat, setIsUpdatingCombat] = useState(false);
-  const [initiativeRollInputs, setInitiativeRollInputs] = useState<Record<string, string>>({});
   const [isEncounterEditorVisible, setIsEncounterEditorVisible] = useState(false);
   const [editingEncounterId, setEditingEncounterId] = useState<string | null>(null);
   const [encounterName, setEncounterName] = useState('');
+  const [encounterBackgroundId, setEncounterBackgroundId] =
+    useState<CampaignEncounterBackgroundId | null>(null);
+  const [encounterEditorTab, setEncounterEditorTab] =
+    useState<'prepare' | 'reinforcements'>('prepare');
   const [encounterEnemies, setEncounterEnemies] = useState<CampaignEncounterEnemyInput[]>([]);
   const [encounterAllies, setEncounterAllies] = useState<CampaignCombatAlly[]>([]);
   const [isSavingEncounter, setIsSavingEncounter] = useState(false);
   const [isDeletingEncounter, setIsDeletingEncounter] = useState(false);
   const [isDeleteEncounterConfirmVisible, setIsDeleteEncounterConfirmVisible] = useState(false);
   const [onlineIdentity, setOnlineIdentity] = useState<SupabaseIdentity | null>(null);
-  const [isOnlineIdentityLoading, setIsOnlineIdentityLoading] = useState(true);
-  const [onlineIdentityError, setOnlineIdentityError] = useState<string | null>(null);
   const [onlineLobby, setOnlineLobby] = useState<OnlineLobbySnapshot | null>(null);
   const [isOnlineLobbyVisible, setIsOnlineLobbyVisible] = useState(false);
   const [isOnlineLobbyBusy, setIsOnlineLobbyBusy] = useState(false);
   const [onlineLobbyError, setOnlineLobbyError] = useState<string | null>(null);
+  const [selectedOnlineInitiativeKeys, setSelectedOnlineInitiativeKeys] = useState<string[]>([]);
+  const [onlineInitiativeInputs, setOnlineInitiativeInputs] = useState<Record<string, string>>({});
   const [isEnemyPickerVisible, setIsEnemyPickerVisible] = useState(false);
   const [enemySearch, setEnemySearch] = useState('');
   const [enemyForm, setEnemyForm] = useState<EnemyForm | null>(null);
@@ -366,11 +443,11 @@ export default function CampaignDetailScreen() {
   const [isPickingEnemyImage, setIsPickingEnemyImage] = useState(false);
   const [isSavingEnemyPreset, setIsSavingEnemyPreset] = useState(false);
   const [selectedEncounter, setSelectedEncounter] = useState<CampaignEncounter | null>(null);
-  const [isEncounterLobbyVisible, setIsEncounterLobbyVisible] = useState(false);
   const [isAddingCombatAlly, setIsAddingCombatAlly] = useState(false);
   const [combatAllyName, setCombatAllyName] = useState('');
   const [combatAllyRace, setCombatAllyRace] = useState('');
   const [combatAllyClass, setCombatAllyClass] = useState('');
+  const [combatAllyArmorClass, setCombatAllyArmorClass] = useState('10');
   const [combatAllyInitiative, setCombatAllyInitiative] = useState(0);
   const [combatAllyMaxHp, setCombatAllyMaxHp] = useState('10');
   const [combatAllyPortraitUri, setCombatAllyPortraitUri] = useState<string | null>(null);
@@ -415,6 +492,7 @@ export default function CampaignDetailScreen() {
     setCombatAllyName('');
     setCombatAllyRace('');
     setCombatAllyClass('');
+    setCombatAllyArmorClass('10');
     setCombatAllyInitiative(0);
     setCombatAllyMaxHp('10');
     setCombatAllyPortraitUri(null);
@@ -511,6 +589,11 @@ export default function CampaignDetailScreen() {
       setCombatAllyError('HP must be a whole number from 1 to 9999.');
       return;
     }
+    const armorClass = Number(combatAllyArmorClass);
+    if (!Number.isInteger(armorClass) || armorClass < 1 || armorClass > 40) {
+      setCombatAllyError('AC must be a whole number from 1 to 40.');
+      return;
+    }
 
     setIsSavingCombatAlly(true);
     setCombatAllyError(null);
@@ -521,6 +604,7 @@ export default function CampaignDetailScreen() {
         className: combatAllyClass,
         ...(combatAllyRace.trim() ? { race: combatAllyRace.trim() } : {}),
         initiative: combatAllyInitiative,
+        armorClass,
         portraitUri: combatAllyPortraitUri,
         ...(combatAllyPortraitPresetId
           ? { portraitPresetId: combatAllyPortraitPresetId }
@@ -571,7 +655,6 @@ export default function CampaignDetailScreen() {
   useEffect(() => {
     let isActive = true;
     if (!isSupabaseConfigured()) {
-      setIsOnlineIdentityLoading(false);
       return () => {
         isActive = false;
       };
@@ -583,13 +666,10 @@ export default function CampaignDetailScreen() {
       })
       .catch((error: unknown) => {
         if (isActive) {
-          setOnlineIdentityError(
+          setOnlineLobbyError(
             error instanceof Error ? error.message : 'Online device identity could not be created.',
           );
         }
-      })
-      .finally(() => {
-        if (isActive) setIsOnlineIdentityLoading(false);
       });
     return () => {
       isActive = false;
@@ -623,7 +703,6 @@ export default function CampaignDetailScreen() {
       } while (isActive && refreshAgain);
       isRefreshing = false;
     };
-    setOnlineLobbyError(null);
     const unsubscribe = subscribeToOnlineCombatLobby(
       onlineIdentity,
       lobbyId,
@@ -639,8 +718,40 @@ export default function CampaignDetailScreen() {
     };
   }, [onlineIdentity, onlineLobby?.lobby_id, isOnlineLobbyVisible]);
 
+  const campaignId = campaign?.id;
+  useEffect(() => {
+    if (!onlineIdentity || !campaignId) return;
+    let isActive = true;
+    void restoreLastOnlineLobby(onlineIdentity)
+      .then((snapshot) => {
+        if (
+          isActive &&
+          snapshot?.role === 'dm' &&
+          snapshot.owner_id === onlineIdentity.userId &&
+          snapshot.status === 'open'
+        ) {
+          setOnlineLobby(snapshot);
+        }
+      })
+      .catch((error: unknown) => {
+        if (isActive) {
+          setOnlineLobbyError(
+            error instanceof Error ? error.message : 'Saved online lobby could not be restored.',
+          );
+        }
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [campaignId, onlineIdentity]);
+
   async function handleAddCharacter() {
     if (!campaign || isSavingCharacter) return;
+    const armorClass = Number(characterArmorClass);
+    if (!Number.isInteger(armorClass) || armorClass < 1 || armorClass > 40) {
+      setActionError('AC must be a whole number from 1 to 40.');
+      return;
+    }
     setIsSavingCharacter(true);
     setActionError(null);
     try {
@@ -649,6 +760,7 @@ export default function CampaignDetailScreen() {
         race: characterRace.trim(),
         className: characterClass,
         initiative: characterInitiative,
+        armorClass,
         portraitUri: characterPortraitUri,
         ...(characterPortraitPresetId
           ? { portraitPresetId: characterPortraitPresetId }
@@ -658,6 +770,7 @@ export default function CampaignDetailScreen() {
       setCharacterName('');
       setCharacterRace('');
       setCharacterClass('');
+      setCharacterArmorClass('10');
       setCharacterInitiative(0);
       setInitiativeSliderKey((key) => key + 1);
       setCharacterPortraitUri(null);
@@ -740,6 +853,36 @@ export default function CampaignDetailScreen() {
     }
   }
 
+  async function handleSaveArmorClass() {
+    if (!campaign || !selectedCharacter || isUpdatingCharacter) return;
+    const armorClass = Number(editedArmorClass);
+    if (!Number.isInteger(armorClass) || armorClass < 1 || armorClass > 40) {
+      setActionError('AC must be a whole number from 1 to 40.');
+      return;
+    }
+    setIsUpdatingCharacter(true);
+    setActionError(null);
+    try {
+      const updatedCampaign = await updateCampaignCharacterArmorClass(
+        campaign.id,
+        selectedCharacter.id,
+        armorClass,
+      );
+      const updatedCharacter = (updatedCampaign.characters ?? []).find(
+        (character) => character.id === selectedCharacter.id,
+      );
+      setCampaign(updatedCampaign);
+      if (updatedCharacter) setSelectedCharacter(updatedCharacter);
+      setIsEditingArmorClass(false);
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'AC could not be updated.',
+      );
+    } finally {
+      setIsUpdatingCharacter(false);
+    }
+  }
+
   async function handleAdvanceCombat() {
     if (!campaign || isUpdatingCombat) return;
     setIsUpdatingCombat(true);
@@ -793,15 +936,22 @@ export default function CampaignDetailScreen() {
     setActionError(null);
     setEditingEncounterId(encounter?.id ?? null);
     setEncounterName(encounter?.name ?? '');
+    setEncounterBackgroundId(encounter?.backgroundId ?? null);
+    setEncounterEditorTab('prepare');
     setEncounterEnemies(
       encounter?.enemies.map((enemy) => ({
         name: enemy.name,
         imageId: enemy.imageId ?? 'skeleton',
         imageUri: campaign?.customEnemyPresets?.find((preset) => preset.id === enemy.imageId)
           ?.imageUri,
+        armorClass: enemy.armorClass ?? 10,
         quantity: enemy.quantity ?? 1,
         initiative: enemy.initiative,
         initiativeMode: enemy.initiativeMode ?? 'individual',
+        arrivalMode: enemy.arrivalMode ??
+          (enemy.status === 'scheduled' && (enemy.arrivalRound ?? 1) === 1 ? 'dm' : 'round'),
+        arrivalRound: enemy.arrivalRound ?? 1,
+        arrivalNote: enemy.arrivalNote ?? '',
         maxHp: enemy.maxHp ?? 10,
       })) ?? [],
     );
@@ -830,6 +980,7 @@ export default function CampaignDetailScreen() {
         encounterEnemies,
         status,
         encounterAllies,
+        encounterBackgroundId ?? undefined,
       );
       setCampaign(updatedCampaign);
       setIsEncounterEditorVisible(false);
@@ -856,18 +1007,20 @@ export default function CampaignDetailScreen() {
         encounterEnemies,
         'ready',
         encounterAllies,
+        encounterBackgroundId ?? undefined,
       );
       const encounter =
         updatedCampaign.encounters?.find((item) => item.id === editingEncounterId) ??
         updatedCampaign.encounters?.[updatedCampaign.encounters.length - 1];
       if (!encounter) throw new Error('The encounter could not be loaded after saving.');
       setCampaign(updatedCampaign);
-      setSelectedEncounter(encounter);
-      setIsEncounterEditorVisible(false);
-      setIsEncounterLobbyVisible(true);
-      setEditingEncounterId(null);
+      await openOnlineLobbyForEncounter(updatedCampaign, encounter);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Encounter could not be saved.');
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : 'The encounter was saved, but its online lobby could not be opened.',
+      );
     } finally {
       setIsSavingEncounter(false);
     }
@@ -885,9 +1038,13 @@ export default function CampaignDetailScreen() {
             imageUri: enemy.imageUri ??
               campaign?.customEnemyPresets?.find((preset) => preset.id === enemy.imageId)
                 ?.imageUri,
+            armorClass: String(enemy.armorClass ?? 10),
             quantity: String(enemy.quantity),
             initiative: String(enemy.initiative),
             initiativeMode: enemy.initiativeMode,
+            arrivalMode: enemy.arrivalMode ?? 'round',
+            arrivalRound: String(enemy.arrivalRound ?? 1),
+            arrivalNote: enemy.arrivalNote ?? '',
             maxHp: String(enemy.maxHp ?? 10),
           }
         : null,
@@ -903,11 +1060,15 @@ export default function CampaignDetailScreen() {
       return {
         name: !current || presetChanged ? preset.name : current.name,
         imageId: preset.id,
+        armorClass: current?.armorClass ?? '10',
         quantity: current?.quantity ?? '1',
         initiative: !current || presetChanged
           ? String(preset.initiative)
           : current.initiative,
         initiativeMode: current?.initiativeMode ?? 'individual',
+        arrivalMode: current?.arrivalMode ?? 'round',
+        arrivalRound: current?.arrivalRound ?? '1',
+        arrivalNote: current?.arrivalNote ?? '',
         maxHp: current?.maxHp ?? '10',
       };
     });
@@ -921,11 +1082,15 @@ export default function CampaignDetailScreen() {
         name: !current || presetChanged ? preset.name : current.name,
         imageId: preset.id,
         imageUri: preset.imageUri,
+        armorClass: current?.armorClass ?? '10',
         quantity: current?.quantity ?? '1',
         initiative: !current || presetChanged
           ? String(preset.initiative)
           : current.initiative,
         initiativeMode: current?.initiativeMode ?? 'individual',
+        arrivalMode: current?.arrivalMode ?? 'round',
+        arrivalRound: current?.arrivalRound ?? '1',
+        arrivalNote: current?.arrivalNote ?? '',
         maxHp: current?.maxHp ?? '10',
       };
     });
@@ -983,9 +1148,13 @@ export default function CampaignDetailScreen() {
         name: current?.name ?? 'Custom Enemy',
         imageId: '',
         imageUri,
+        armorClass: current?.armorClass ?? '10',
         quantity: current?.quantity ?? '1',
         initiative: current?.initiative ?? '0',
         initiativeMode: current?.initiativeMode ?? 'individual',
+        arrivalMode: current?.arrivalMode ?? 'round',
+        arrivalRound: current?.arrivalRound ?? '1',
+        arrivalNote: current?.arrivalNote ?? '',
         maxHp: current?.maxHp ?? '10',
       }));
     } catch (error) {
@@ -1004,7 +1173,9 @@ export default function CampaignDetailScreen() {
     }
     const quantity = Number(enemyForm.quantity);
     const initiative = Number(enemyForm.initiative);
+    const armorClass = Number(enemyForm.armorClass);
     const maxHp = Number(enemyForm.maxHp);
+    const arrivalRound = Number(enemyForm.arrivalRound);
     if (!enemyForm.name.trim()) {
       setEnemyFormError('Enter an enemy name.');
       return;
@@ -1019,6 +1190,17 @@ export default function CampaignDetailScreen() {
     }
     if (!Number.isInteger(maxHp) || maxHp < 1 || maxHp > 9999) {
       setEnemyFormError('HP per enemy must be a whole number from 1 to 9999.');
+      return;
+    }
+    if (!Number.isInteger(armorClass) || armorClass < 1 || armorClass > 40) {
+      setEnemyFormError('AC must be a whole number from 1 to 40.');
+      return;
+    }
+    if (
+      enemyForm.arrivalMode === 'round' &&
+      (!Number.isInteger(arrivalRound) || arrivalRound < 1 || arrivalRound > 999)
+    ) {
+      setEnemyFormError('Arrival round must be a whole number from 1 to 999.');
       return;
     }
     if (!enemyForm.imageId && !enemyForm.imageUri) {
@@ -1049,9 +1231,17 @@ export default function CampaignDetailScreen() {
         name: enemyForm.name.trim(),
         imageId,
         imageUri,
+        armorClass,
         quantity,
         initiative,
         initiativeMode: enemyForm.initiativeMode,
+        arrivalMode: enemyForm.arrivalMode,
+        arrivalRound: enemyForm.arrivalMode === 'dm' ? 1 : arrivalRound,
+        arrivalNote: enemyForm.arrivalMode === 'dm' ? enemyForm.arrivalNote.trim() : undefined,
+        status:
+          enemyForm.arrivalMode === 'dm' || arrivalRound > 1
+            ? 'scheduled'
+            : 'waiting',
         maxHp,
       };
       setEncounterEnemies((current) => {
@@ -1084,7 +1274,6 @@ export default function CampaignDetailScreen() {
       setSelectedEncounter(null);
       setIsDeleteEncounterConfirmVisible(false);
       setIsEncounterEditorVisible(false);
-      setIsEncounterLobbyVisible(false);
       setEditingEncounterId(null);
     } catch (error) {
       setActionError(
@@ -1095,43 +1284,40 @@ export default function CampaignDetailScreen() {
     }
   }
 
-  async function handleStartEncounter(encounter: CampaignEncounter) {
-    if (!campaign || isUpdatingCombat) return;
-    setIsUpdatingCombat(true);
-    setActionError(null);
-    try {
-      const updatedCampaign = await startCampaignCombat(campaign.id, encounter.id);
-      setCampaign(updatedCampaign);
-      setSelectedEncounter(null);
-      setIsEncounterLobbyVisible(false);
-      setIsCombatModalVisible(true);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Encounter combat could not start.');
-    } finally {
-      setIsUpdatingCombat(false);
-    }
-  }
-
-  async function handleCreateOnlineLobby() {
-    if (!campaign || !selectedEncounter || isOnlineLobbyBusy) return;
+  async function openOnlineLobbyForEncounter(
+    lobbyCampaign: Campaign,
+    encounter: CampaignEncounter,
+  ) {
+    if (isOnlineLobbyBusy) return;
     setIsOnlineLobbyBusy(true);
-    setOnlineLobbyError(null);
+    setActionError(null);
     try {
       const identity = onlineIdentity ?? await ensureSupabaseIdentity();
       if (!onlineIdentity) setOnlineIdentity(identity);
-      const snapshot = await createOnlineCombatLobby(
-        identity,
-        campaign.id,
-        selectedEncounter,
-        activeCharacters,
-      );
+      const previousLobby = await restoreLastOnlineLobby(identity);
+      const snapshot = previousLobby?.role === 'dm' &&
+        previousLobby.owner_id === identity.userId &&
+        previousLobby.encounter_id === encounter.id &&
+        previousLobby.status === 'open' &&
+        previousLobby.initiative_schema_version === 1
+        ? previousLobby
+        : await createOnlineCombatLobby(
+            identity,
+            lobbyCampaign.id,
+            encounter,
+            activeCharacters,
+            encounter.allies ?? [],
+            encounter.backgroundId ?? null,
+          );
       setOnlineLobby(snapshot);
-      setIsEncounterLobbyVisible(false);
-      setIsOnlineLobbyVisible(true);
+      setSelectedOnlineInitiativeKeys([]);
+      setOnlineInitiativeInputs({});
+      setIsEncounterEditorVisible(false);
+      setSelectedEncounter(encounter);
+      setEditingEncounterId(null);
+      router.push('/lobby');
     } catch (error) {
-      setOnlineLobbyError(
-        error instanceof Error ? error.message : 'Online lobby could not be created.',
-      );
+      setActionError(error instanceof Error ? error.message : 'Online lobby could not be opened.');
     } finally {
       setIsOnlineLobbyBusy(false);
     }
@@ -1169,140 +1355,80 @@ export default function CampaignDetailScreen() {
     }
   }
 
-  async function handleSaveEncounterInitiative(participantId: string, rawRoll: number) {
-    if (!campaign || !selectedEncounter || isUpdatingCombat) return;
-    setIsUpdatingCombat(true);
-    setActionError(null);
-    try {
-      const updatedCampaign = await saveCampaignEncounterInitiative(
-        campaign.id,
-        selectedEncounter.id,
-        participantId,
-        rawRoll,
-      );
-      setCampaign(updatedCampaign);
-      setSelectedEncounter(
-        updatedCampaign.encounters?.find((item) => item.id === selectedEncounter.id) ?? null,
-      );
-      setInitiativeRollInputs((current) => ({ ...current, [participantId]: '' }));
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : 'Initiative result could not be saved.',
-      );
-    } finally {
-      setIsUpdatingCombat(false);
-    }
-  }
-
-  async function handleResetEncounterInitiative(participantId: string) {
-    if (!campaign || !selectedEncounter || isUpdatingCombat) return;
-    setIsUpdatingCombat(true);
-    setActionError(null);
-    try {
-      const updatedCampaign = await resetCampaignEncounterInitiative(
-        campaign.id,
-        selectedEncounter.id,
-        participantId,
-      );
-      setCampaign(updatedCampaign);
-      setSelectedEncounter(
-        updatedCampaign.encounters?.find((item) => item.id === selectedEncounter.id) ?? null,
-      );
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : 'Initiative result could not be reset.',
-      );
-    } finally {
-      setIsUpdatingCombat(false);
-    }
-  }
-
-  function renderInitiativeSubmission(
-    participantId: string,
-    name: string,
-    initiativeBonus: number,
+  async function handleSubmitDmInitiative(
+    initiativeKeys: string[],
+    options: { rawRoll?: number; rollUnrolled?: boolean } = {},
   ) {
-    const result = selectedEncounter?.initiativeResults?.[participantId];
-    if (result) {
-      return (
-        <View style={styles.initiativeSubmission}>
-          <Text
-            style={[
-              styles.initiativeSubmissionResult,
-              result.bonus !== initiativeBonus && styles.initiativeSubmissionStale,
-            ]}
-          >
-            {result.bonus === initiativeBonus
-              ? `${result.rawRoll} ${result.bonus >= 0 ? '+' : '−'} ${Math.abs(result.bonus)} = ${result.total} · Ready`
-              : 'Initiative bonus changed · reset and reroll'}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Reset ${name} initiative`}
-            disabled={isUpdatingCombat}
-            onPress={() => void handleResetEncounterInitiative(participantId)}
-            style={styles.initiativeResetButton}
-          >
-            <Text style={styles.initiativeResetText}>Reset</Text>
-          </Pressable>
-        </View>
-      );
+    if (!onlineIdentity || !onlineLobby || isOnlineLobbyBusy || onlineLobby.role !== 'dm') {
+      return;
     }
+    setIsOnlineLobbyBusy(true);
+    setOnlineLobbyError(null);
+    try {
+      await submitDmInitiative(
+        onlineIdentity,
+        onlineLobby.lobby_id,
+        initiativeKeys,
+        options,
+      );
+      setSelectedOnlineInitiativeKeys([]);
+      setOnlineLobby(await loadOnlineLobbySnapshot(onlineIdentity, onlineLobby.lobby_id));
+    } catch (error) {
+      setOnlineLobbyError(
+        error instanceof Error ? error.message : 'Initiative could not be saved.',
+      );
+    } finally {
+      setIsOnlineLobbyBusy(false);
+    }
+  }
 
-    const input = initiativeRollInputs[participantId] ?? '';
-    const parsedRoll = /^\d+$/.test(input) ? Number(input) : Number.NaN;
-    return (
-      <View style={styles.initiativeSubmissionBlock}>
-        <Text style={styles.initiativeRollHint}>
-          Your d20 result — do not add your bonus.
-        </Text>
-        <View style={styles.initiativeSubmission}>
-          <TextInput
-            accessibilityLabel="Your d20 result — do not add your bonus"
-            keyboardType="number-pad"
-            maxLength={2}
-            onChangeText={(value) =>
-              setInitiativeRollInputs((current) => ({ ...current, [participantId]: value }))
-            }
-            placeholder="d20"
-            placeholderTextColor="#8D806B"
-            style={styles.initiativeRollInput}
-            value={input}
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Roll initiative for ${name}`}
-            disabled={isUpdatingCombat}
-            onPress={() => void handleSaveEncounterInitiative(
-              participantId,
-              Math.floor(Math.random() * 20) + 1,
-            )}
-            style={styles.initiativeRollButton}
-          >
-            <Text style={styles.initiativeRollButtonText}>Roll d20</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            disabled={
-              isUpdatingCombat ||
-              !Number.isInteger(parsedRoll) ||
-              parsedRoll < 1 ||
-              parsedRoll > 20
-            }
-            onPress={() => void handleSaveEncounterInitiative(participantId, parsedRoll)}
-            style={[
-              styles.initiativeRollButton,
-              (isUpdatingCombat ||
-                !Number.isInteger(parsedRoll) ||
-                parsedRoll < 1 ||
-                parsedRoll > 20) &&
-                styles.initiativeSubmissionDisabled,
-            ]}
-          >
-            <Text style={styles.initiativeRollButtonText}>Enter Roll</Text>
-          </Pressable>
-        </View>
-      </View>
+  async function handleResetOnlineInitiative(initiativeKey: string) {
+    if (!onlineIdentity || !onlineLobby || isOnlineLobbyBusy || onlineLobby.role !== 'dm') {
+      return;
+    }
+    setIsOnlineLobbyBusy(true);
+    setOnlineLobbyError(null);
+    try {
+      await resetDmInitiative(onlineIdentity, onlineLobby.lobby_id, initiativeKey);
+      setOnlineLobby(await loadOnlineLobbySnapshot(onlineIdentity, onlineLobby.lobby_id));
+    } catch (error) {
+      setOnlineLobbyError(
+        error instanceof Error ? error.message : 'Initiative could not be reset.',
+      );
+    } finally {
+      setIsOnlineLobbyBusy(false);
+    }
+  }
+
+  async function handleStartOnlineCombat() {
+    if (
+      !onlineIdentity ||
+      !onlineLobby ||
+      isOnlineLobbyBusy ||
+      onlineLobby.role !== 'dm' ||
+      onlineLobby.combat_started
+    ) {
+      return;
+    }
+    setIsOnlineLobbyBusy(true);
+    setOnlineLobbyError(null);
+    try {
+      await startOnlineCombat(onlineIdentity, onlineLobby.lobby_id);
+      setOnlineLobby(await loadOnlineLobbySnapshot(onlineIdentity, onlineLobby.lobby_id));
+    } catch (error) {
+      setOnlineLobbyError(
+        error instanceof Error ? error.message : 'Combat could not be started.',
+      );
+    } finally {
+      setIsOnlineLobbyBusy(false);
+    }
+  }
+
+  function toggleOnlineInitiativeSelection(initiativeKey: string) {
+    setSelectedOnlineInitiativeKeys((current) =>
+      current.includes(initiativeKey)
+        ? current.filter((key) => key !== initiativeKey)
+        : [...current, initiativeKey],
     );
   }
 
@@ -1316,68 +1442,6 @@ export default function CampaignDetailScreen() {
   const matchingCustomEnemyPresets = (campaign?.customEnemyPresets ?? []).filter((preset) =>
     preset.name.toLowerCase().includes(enemySearch.trim().toLowerCase()),
   );
-  const unrolledNonPlayerParticipants = selectedEncounter
-    ? [
-        ...(selectedEncounter.allies ?? []).map((ally) => ({
-          id: getCampaignInitiativeKey('ally', ally.id),
-          name: ally.name,
-        })),
-        ...selectedEncounter.enemies.flatMap((enemy) => {
-          const quantity = enemy.quantity ?? 1;
-          return enemy.initiativeMode === 'horde' && quantity > 1
-            ? [{
-                id: getCampaignInitiativeKey('enemy', enemy.id, undefined, true),
-                name: `${enemy.name} Horde`,
-              }]
-            : Array.from({ length: quantity }, (_, index) => ({
-                id: getCampaignInitiativeKey('enemy', enemy.id, index),
-                name: quantity === 1 ? enemy.name : `${enemy.name} ${index + 1}`,
-              }));
-        }),
-      ].filter((participant) => !selectedEncounter.initiativeResults?.[participant.id])
-    : [];
-  const missingInitiativeNames = selectedEncounter
-    ? [
-        ...activeCharacters
-          .filter(
-            (character) => {
-              const result = selectedEncounter.initiativeResults?.[
-                getCampaignInitiativeKey('character', character.id)
-              ];
-              return !result || result.bonus !== character.initiative;
-            },
-          )
-          .map((character) => character.name),
-        ...(selectedEncounter.allies ?? [])
-          .filter(
-            (ally) => {
-              const result = selectedEncounter.initiativeResults?.[
-                getCampaignInitiativeKey('ally', ally.id)
-              ];
-              return !result || result.bonus !== ally.initiative;
-            },
-          )
-          .map((ally) => ally.name),
-        ...selectedEncounter.enemies.flatMap((enemy) => {
-          const quantity = enemy.quantity ?? 1;
-          if (enemy.initiativeMode === 'horde' && quantity > 1) {
-            const result = selectedEncounter.initiativeResults?.[
-              getCampaignInitiativeKey('enemy', enemy.id, undefined, true)
-            ];
-            return result?.bonus === enemy.initiative ? [] : [`${enemy.name} horde`];
-          }
-          return Array.from({ length: quantity }, (_, index) =>
-            selectedEncounter.initiativeResults?.[
-              getCampaignInitiativeKey('enemy', enemy.id, index)
-            ]?.bonus === enemy.initiative
-              ? null
-              : quantity === 1
-                ? enemy.name
-                : `${enemy.name} ${index + 1}`,
-          ).filter((name): name is string => name !== null);
-        }),
-      ]
-    : [];
   const combatParticipantIds = campaign?.combat?.participantIds
     ? new Set(campaign.combat.participantIds)
     : null;
@@ -1401,6 +1465,7 @@ export default function CampaignDetailScreen() {
               race: character.race,
               portraitUri: character.portraitUri,
               portraitPresetId: character.portraitPresetId,
+              armorClass: result?.armorClass ?? character.armorClass,
             };
           }),
         ...(campaign.combat.allies ?? []).map((ally) => ({
@@ -1414,6 +1479,7 @@ export default function CampaignDetailScreen() {
           race: ally.race,
           portraitUri: ally.portraitUri,
           portraitPresetId: ally.portraitPresetId,
+          armorClass: ally.armorClass,
           maxHp: ally.maxHp,
           currentHp: ally.currentHp,
         })),
@@ -1423,41 +1489,66 @@ export default function CampaignDetailScreen() {
   const currentCharacter = initiativeOrder.find(
     (character) => character.id === campaign?.combat?.currentCharacterId,
   );
-  async function handleRollUnrolledEnemies() {
-    if (!campaign || !selectedEncounter || isUpdatingCombat || unrolledNonPlayerParticipants.length === 0) {
-      return;
-    }
-    setIsUpdatingCombat(true);
-    setActionError(null);
-    try {
-      let updatedCampaign = campaign;
-      for (const participant of unrolledNonPlayerParticipants) {
-        const latestEncounter = updatedCampaign.encounters?.find(
-          (item) => item.id === selectedEncounter.id,
-        );
-        if (latestEncounter?.initiativeResults?.[participant.id]) continue;
-        updatedCampaign = await saveCampaignEncounterInitiative(
-          campaign.id,
-          selectedEncounter.id,
-          participant.id,
-          Math.floor(Math.random() * 20) + 1,
-        );
-        setCampaign(updatedCampaign);
-        setSelectedEncounter(
-          updatedCampaign.encounters?.find((item) => item.id === selectedEncounter.id) ?? null,
-        );
-      }
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : 'Unrolled enemies could not be rolled.',
+  const activeCombatEncounter = campaign?.encounters?.find(
+    (encounter) => encounter.id === campaign.combat?.encounterId,
+  );
+  const activeCombatBackground = COMBAT_BACKGROUND_PRESETS.find(
+    (preset) => preset.id === activeCombatEncounter?.backgroundId,
+  )?.source;
+  const currentTurnPortrait = currentCharacter?.imageId
+    ? getEnemyImage(currentCharacter.imageId, campaign?.customEnemyPresets)
+    : getCharacterPortraitSource(
+        currentCharacter?.portraitPresetId,
+        currentCharacter?.portraitUri,
       );
-    } finally {
-      setIsUpdatingCombat(false);
-    }
-  }
+  const onlineCombatBackground = COMBAT_BACKGROUND_PRESETS.find(
+    (preset) => preset.id === onlineLobby?.background_id,
+  )?.source;
   const coverSource = campaign
     ? getCampaignCoverSource(campaign.coverId, campaign.coverUri)
     : null;
+  const onlineResultsByKey = new Map(
+    (onlineLobby?.initiative_results ?? []).map((result) => [result.initiative_key, result]),
+  );
+  const onlineDmParticipantsInDisplayOrder = [...(onlineLobby?.dm_participants ?? [])].sort(
+    (left, right) => {
+      const leftResult = onlineResultsByKey.get(left.initiative_key);
+      const rightResult = onlineResultsByKey.get(right.initiative_key);
+      if (leftResult && rightResult) {
+        return rightResult.total - leftResult.total ||
+          left.sort_order - right.sort_order ||
+          left.initiative_key.localeCompare(right.initiative_key);
+      }
+      if (leftResult) return -1;
+      if (rightResult) return 1;
+      return left.sort_order - right.sort_order ||
+        left.initiative_key.localeCompare(right.initiative_key);
+    },
+  );
+  const onlineCharactersInDisplayOrder = [...(onlineLobby?.characters ?? [])].sort(
+    (left, right) => {
+      const leftResult = onlineResultsByKey.get(`character:${left.character_id}`);
+      const rightResult = onlineResultsByKey.get(`character:${right.character_id}`);
+      if (leftResult && rightResult) {
+        return rightResult.total - leftResult.total ||
+          left.name.localeCompare(right.name) ||
+          left.character_id.localeCompare(right.character_id);
+      }
+      if (leftResult) return -1;
+      if (rightResult) return 1;
+      return left.name.localeCompare(right.name) ||
+        left.character_id.localeCompare(right.character_id);
+    },
+  );
+  const onlineInitiativeResultsInOrder = [...(onlineLobby?.initiative_results ?? [])].sort(
+    (left, right) =>
+      right.total - left.total ||
+      left.sort_order - right.sort_order ||
+      left.initiative_key.localeCompare(right.initiative_key),
+  );
+  const unrolledOnlineDmParticipants = (onlineLobby?.dm_participants ?? []).filter(
+    (participant) => !onlineResultsByKey.has(participant.initiative_key),
+  );
   const renderCharacterCard = (character: CampaignCharacter) => (
     <View key={character.id} style={styles.characterCard}>
       <View style={styles.characterPortrait}>
@@ -1481,7 +1572,7 @@ export default function CampaignDetailScreen() {
         </Text>
         <View style={styles.characterDivider} />
         <Text style={styles.characterStats}>
-          Initiative {character.initiative >= 0 ? '+' : ''}
+          AC {character.armorClass ?? 10} · Initiative {character.initiative >= 0 ? '+' : ''}
           {character.initiative}
         </Text>
       </View>
@@ -1495,6 +1586,7 @@ export default function CampaignDetailScreen() {
           setSelectedCharacter(character);
           setEditedInitiative(character.initiative);
           setIsEditingInitiative(false);
+          setIsEditingArmorClass(false);
           setIsCharacterDeleteConfirmVisible(false);
           setIsCharacterMenuVisible(true);
         }}
@@ -1510,9 +1602,10 @@ export default function CampaignDetailScreen() {
   return (
     <View style={styles.screen}>
       <ImageBackground
-        source={require('../../../assets/images/campaigns-list-background.png')}
-        resizeMode="stretch"
-        style={{ width: artworkWidth, height: artworkHeight }}
+        source={require('../../../assets/images/campaign-cover-haunted-city.jpg')}
+        imageStyle={styles.backgroundTextureImage}
+        resizeMode="cover"
+        style={styles.backgroundArtwork}
       >
         <View style={styles.page}>
           <Pressable
@@ -1540,84 +1633,79 @@ export default function CampaignDetailScreen() {
               >
                 <Text style={styles.retryText}>Try again</Text>
               </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => router.replace('/campaigns')}
-              >
-                <Text style={styles.backToCampaigns}>Back to campaigns</Text>
-              </Pressable>
             </View>
           ) : (
             <>
+              <ImageBackground
+                imageStyle={styles.heroImage}
+                resizeMode="cover"
+                source={
+                  coverSource ??
+                  require('../../../assets/images/campaign-cover-sunlit-bay.jpg')
+                }
+                style={styles.hero}
+              >
+                <View style={styles.heroShade} />
+                <Text numberOfLines={2} style={styles.heroTitle}>
+                  {campaign.name}
+                </Text>
+              </ImageBackground>
+
+              {activeTab !== 'Encounters' && (
+                <View style={styles.combatBanner}>
+                  <View style={styles.combatBannerLabel}>
+                    <Text style={styles.combatIcon}>⚔</Text>
+                    <Text style={styles.combatBannerText}>
+                      {campaign.combat ? 'Combat in progress' : 'Ready for combat'}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isUpdatingCombat}
+                    onPress={() => {
+                      if (campaign.combat) {
+                        setIsCombatModalVisible(true);
+                      } else {
+                        setActiveTab('Encounters');
+                        openEncounterEditor();
+                        setEncounterName('Quick Combat');
+                      }
+                    }}
+                    style={styles.combatAction}
+                  >
+                    <Text style={styles.combatActionText}>
+                      {isUpdatingCombat
+                        ? 'Please wait...'
+                        : campaign.combat
+                          ? 'Resume Combat  ›'
+                          : 'Prepare Combat  ›'}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+              {actionError && <Text style={styles.errorText}>{actionError}</Text>}
+
+              <View accessibilityRole="tablist" style={styles.tabs}>
+                {CAMPAIGN_TABS.map((tab) => (
+                  <Pressable
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: activeTab === tab }}
+                    key={tab}
+                    onPress={() => setActiveTab(tab)}
+                    style={[styles.tab, activeTab === tab && styles.activeTab]}
+                  >
+                    <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>
+                      {tab}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
               <ScrollView
+                style={styles.mainContentScroll}
                 contentContainerStyle={styles.content}
                 showsVerticalScrollIndicator={false}
               >
-                <ImageBackground
-                  imageStyle={styles.heroImage}
-                  resizeMode="cover"
-                  source={
-                    coverSource ??
-                    require('../../../assets/images/campaign-cover-sunlit-bay.jpg')
-                  }
-                  style={styles.hero}
-                >
-                  <View style={styles.heroShade} />
-                  <Text numberOfLines={2} style={styles.heroTitle}>
-                    {campaign.name}
-                  </Text>
-                </ImageBackground>
-
-                {activeTab !== 'Encounters' && (
-                  <View style={styles.combatBanner}>
-                    <View style={styles.combatBannerLabel}>
-                      <Text style={styles.combatIcon}>⚔</Text>
-                      <Text style={styles.combatBannerText}>
-                        {campaign.combat ? 'Combat in progress' : 'Ready for combat'}
-                      </Text>
-                    </View>
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={isUpdatingCombat}
-                      onPress={() => {
-                        if (campaign.combat) {
-                          setIsCombatModalVisible(true);
-                        } else {
-                          setActiveTab('Encounters');
-                          openEncounterEditor();
-                          setEncounterName('Quick Combat');
-                        }
-                      }}
-                      style={styles.combatAction}
-                    >
-                      <Text style={styles.combatActionText}>
-                        {isUpdatingCombat
-                          ? 'Please wait...'
-                          : campaign.combat
-                            ? 'Resume Combat  ›'
-                            : 'Prepare Combat  ›'}
-                      </Text>
-                    </Pressable>
-                  </View>
-                )}
-                {actionError && <Text style={styles.errorText}>{actionError}</Text>}
-
-                <View accessibilityRole="tablist" style={styles.tabs}>
-                  {CAMPAIGN_TABS.map((tab) => (
-                    <Pressable
-                      accessibilityRole="tab"
-                      accessibilityState={{ selected: activeTab === tab }}
-                      key={tab}
-                      onPress={() => setActiveTab(tab)}
-                      style={[styles.tab, activeTab === tab && styles.activeTab]}
-                    >
-                      <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>
-                        {tab}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-
                 {activeTab === 'Party' ? (
                   <>
                     <View style={styles.sectionHeading}>
@@ -1629,6 +1717,7 @@ export default function CampaignDetailScreen() {
                           setCharacterName('');
                           setCharacterRace('');
                           setCharacterClass('');
+                          setCharacterArmorClass('10');
                           setCharacterPortraitUri(null);
                           setCharacterPortraitPresetId(null);
                           setIsCharacterModalVisible(true);
@@ -1795,25 +1884,26 @@ export default function CampaignDetailScreen() {
                                   </Pressable>
                                   <Pressable
                                     accessibilityRole="button"
-                                    disabled={!canOpenLobby}
+                                    disabled={!canOpenLobby || isOnlineLobbyBusy}
                                     onPress={() => {
                                       setActionError(null);
-                                      setSelectedEncounter(encounter);
-                                      setIsEncounterLobbyVisible(true);
+                                      void openOnlineLobbyForEncounter(campaign, encounter);
                                     }}
                                     style={[
                                       styles.encounterLobbyButton,
-                                      !canOpenLobby && styles.encounterDisabledButton,
+                                      (!canOpenLobby || isOnlineLobbyBusy) &&
+                                        styles.encounterDisabledButton,
                                     ]}
                                   >
                                     <Text style={styles.encounterLobbyIcon}>♟</Text>
                                     <Text
                                       style={[
                                         styles.encounterActionText,
-                                        !canOpenLobby && styles.encounterDisabledText,
+                                        (!canOpenLobby || isOnlineLobbyBusy) &&
+                                          styles.encounterDisabledText,
                                       ]}
                                     >
-                                      Open Lobby
+                                      {isOnlineLobbyBusy ? 'Opening…' : 'Open Online Lobby'}
                                     </Text>
                                   </Pressable>
                                 </View>
@@ -1880,6 +1970,7 @@ export default function CampaignDetailScreen() {
                                 setSelectedCharacter(character);
                                 setEditedInitiative(character.initiative);
                                 setIsEditingInitiative(false);
+                                setIsEditingArmorClass(false);
                                 setIsCharacterDeleteConfirmVisible(false);
                                 setIsCharacterMenuVisible(true);
                               }}
@@ -2035,6 +2126,19 @@ export default function CampaignDetailScreen() {
                   </Pressable>
                 ))}
               </View>
+              <View style={styles.armorClassInputRow}>
+                <Text style={styles.fieldLabel}>AC (Armor Class)</Text>
+                <TextInput
+                  accessibilityLabel="Character AC (Armor Class)"
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  onChangeText={setCharacterArmorClass}
+                  placeholder="10"
+                  placeholderTextColor="#8D806B"
+                  style={styles.armorClassInput}
+                  value={characterArmorClass}
+                />
+              </View>
               <Pressable
                 accessibilityRole="button"
                 disabled={isPickingPortrait || isSavingCharacter}
@@ -2171,10 +2275,38 @@ export default function CampaignDetailScreen() {
             </View>
             <View style={styles.encounterHeaderSpacer} />
           </View>
+          <View style={styles.encounterEditorTabs}>
+            {([
+              ['prepare', 'Encounter'],
+              ['reinforcements', 'Reinforcements'],
+            ] as const).map(([tab, label]) => (
+              <Pressable
+                accessibilityRole="tab"
+                accessibilityState={{ selected: encounterEditorTab === tab }}
+                key={tab}
+                onPress={() => setEncounterEditorTab(tab)}
+                style={[
+                  styles.encounterEditorTab,
+                  encounterEditorTab === tab && styles.encounterEditorTabSelected,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.encounterEditorTabText,
+                    encounterEditorTab === tab && styles.encounterEditorTabTextSelected,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
           <ScrollView
             contentContainerStyle={styles.encounterEditorContent}
             keyboardShouldPersistTaps="handled"
           >
+            {encounterEditorTab === 'prepare' ? (
+              <>
             <Text style={styles.encounterFieldLabel}>Encounter name</Text>
             <TextInput
               accessibilityLabel="Encounter name"
@@ -2186,6 +2318,59 @@ export default function CampaignDetailScreen() {
               style={styles.encounterNameInput}
               value={encounterName}
             />
+
+            <View style={styles.combatBackgroundPicker}>
+              <Text style={styles.encounterSectionTitle}>Combat Background</Text>
+              <Text style={styles.combatBackgroundHint}>
+                Choose the scene behind the combat tracker.
+              </Text>
+              <ScrollView
+                horizontal
+                contentContainerStyle={styles.combatBackgroundOptions}
+                showsHorizontalScrollIndicator={false}
+              >
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: encounterBackgroundId === null }}
+                  onPress={() => setEncounterBackgroundId(null)}
+                  style={[
+                    styles.combatBackgroundOption,
+                    encounterBackgroundId === null && styles.combatBackgroundOptionSelected,
+                  ]}
+                >
+                  <Image
+                    accessibilityLabel="Default combat background preview"
+                    resizeMode="cover"
+                    source={require('../../../assets/images/campaigns-list-background.png')}
+                    style={styles.combatBackgroundThumbnail}
+                  />
+                  <Text numberOfLines={1} style={styles.combatBackgroundName}>Default</Text>
+                </Pressable>
+                {COMBAT_BACKGROUND_PRESETS.map((preset) => (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: encounterBackgroundId === preset.id }}
+                    key={preset.id}
+                    onPress={() => setEncounterBackgroundId(preset.id)}
+                    style={[
+                      styles.combatBackgroundOption,
+                      encounterBackgroundId === preset.id &&
+                        styles.combatBackgroundOptionSelected,
+                    ]}
+                  >
+                    <Image
+                      accessibilityLabel={`${preset.name} combat background preview`}
+                      resizeMode="cover"
+                      source={preset.source}
+                      style={styles.combatBackgroundThumbnail}
+                    />
+                    <Text numberOfLines={1} style={styles.combatBackgroundName}>
+                      {preset.name}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
 
             <View style={styles.encounterPartyHeading}>
               <Text style={styles.encounterSectionTitle}>Party</Text>
@@ -2223,6 +2408,9 @@ export default function CampaignDetailScreen() {
                     </Text>
                     <Text numberOfLines={1} style={styles.encounterPartyClass}>
                       {character.className}
+                    </Text>
+                    <Text style={styles.encounterPartyClass}>
+                      AC {character.armorClass ?? 10}
                     </Text>
                   </View>
                 ))}
@@ -2282,6 +2470,9 @@ export default function CampaignDetailScreen() {
                       </Text>
                       <Text style={styles.encounterEnemyModeBadge}>
                         HP {ally.maxHp ?? 10}
+                      </Text>
+                      <Text style={styles.encounterEnemyModeBadge}>
+                        AC {ally.armorClass ?? 10}
                       </Text>
                     </View>
                   </View>
@@ -2353,6 +2544,9 @@ export default function CampaignDetailScreen() {
                         {enemy.maxHp ?? 10} HP each
                       </Text>
                       <Text style={styles.encounterEnemyModeBadge}>
+                        AC {enemy.armorClass ?? 10}
+                      </Text>
+                      <Text style={styles.encounterEnemyModeBadge}>
                         {isIndividualGroup
                           ? `Individual · ${instanceIndex + 1}/${enemy.quantity}`
                           : enemy.initiativeMode === 'horde' && enemy.quantity > 1
@@ -2419,6 +2613,62 @@ export default function CampaignDetailScreen() {
               </Text>
             </View>
             {actionError && <Text style={styles.errorText}>{actionError}</Text>}
+              </>
+            ) : (
+              <View style={styles.reinforcementTabContent}>
+                <Text style={styles.encounterSectionTitle}>Reinforcement Arrival</Text>
+                <Text style={styles.reinforcementIntro}>
+                  Set when each enemy group enters combat. “When Decided” keeps them out of the
+                  initiative until you activate them from the lobby after the trigger occurs.
+                </Text>
+                {encounterEnemies.length > 0 ? (
+                  encounterEnemies.map((enemy, index) => (
+                    <View key={`${enemy.imageId}-${index}`} style={styles.reinforcementCard}>
+                      <Image
+                        accessibilityLabel={`${enemy.name} portrait`}
+                        resizeMode="cover"
+                        source={getEnemyImage(enemy.imageId, campaign?.customEnemyPresets)}
+                        style={styles.reinforcementPortrait}
+                      />
+                      <View style={styles.reinforcementCardInfo}>
+                        <Text style={styles.reinforcementName}>{enemy.name}</Text>
+                        <Text style={styles.reinforcementDetails}>
+                          {enemy.quantity} {enemy.quantity === 1 ? 'enemy' : 'enemies'}
+                          {enemy.arrivalMode === 'dm'
+                              ? ` · When Decided${enemy.arrivalNote ? ` · ${enemy.arrivalNote}` : ''}`
+                            : ` · Round ${enemy.arrivalRound ?? 1}`}
+                        </Text>
+                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Configure arrival for ${enemy.name}`}
+                        onPress={() => openEnemyPicker(enemy, index)}
+                        style={styles.reinforcementEditButton}
+                      >
+                        <Text style={styles.reinforcementEditText}>Configure</Text>
+                      </Pressable>
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.reinforcementEmpty}>
+                    <Text style={styles.reinforcementEmptyText}>
+                      Add enemies on the Encounter tab before scheduling reinforcements.
+                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        setEncounterEditorTab('prepare');
+                        openEnemyPicker();
+                      }}
+                      style={styles.addEnemyButton}
+                    >
+                      <Text style={styles.addEnemyPlus}>＋</Text>
+                      <Text style={styles.addEnemyButtonText}>Add Enemy</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            )}
           </ScrollView>
           <View style={styles.encounterEditorFooter}>
             {editingEncounterId && (
@@ -2456,6 +2706,7 @@ export default function CampaignDetailScreen() {
               accessibilityRole="button"
               disabled={
                 isSavingEncounter ||
+                isOnlineLobbyBusy ||
                 (encounterEnemies.length === 0 && encounterAllies.length === 0) ||
                 !encounterName.trim()
               }
@@ -2463,13 +2714,18 @@ export default function CampaignDetailScreen() {
               style={[
                 styles.encounterOpenLobbyButton,
                 (isSavingEncounter ||
+                  isOnlineLobbyBusy ||
                   (encounterEnemies.length === 0 && encounterAllies.length === 0) ||
                   !encounterName.trim()) &&
                   styles.encounterOpenLobbyDisabled,
               ]}
             >
               <Text style={styles.encounterOpenLobbyIcon}>⚔</Text>
-              <Text style={styles.encounterOpenLobbyText}>Open Lobby</Text>
+              <Text style={styles.encounterOpenLobbyText}>
+                {isSavingEncounter || isOnlineLobbyBusy
+                  ? 'Saving & Opening…'
+                  : 'Open Online Lobby'}
+              </Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -2487,7 +2743,9 @@ export default function CampaignDetailScreen() {
                 style={styles.enemyPickerCard}
               >
                 <View style={styles.enemyPickerHeader}>
-                  <Text style={styles.enemyPickerTitle}>Add Enemy</Text>
+                  <Text style={styles.enemyPickerTitle}>
+                    {editingEnemyIndex === null ? 'Add Enemy' : 'Edit Enemy'}
+                  </Text>
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Close enemy selector"
@@ -2614,6 +2872,21 @@ export default function CampaignDetailScreen() {
                           value={enemyForm.maxHp}
                         />
                       </View>
+                      <View style={styles.enemyHpRow}>
+                        <Text style={styles.enemyFormLabel}>AC (Armor Class)</Text>
+                        <TextInput
+                          accessibilityLabel="Enemy AC (Armor Class)"
+                          keyboardType="number-pad"
+                          maxLength={2}
+                          onChangeText={(armorClass) =>
+                            setEnemyForm((current) => current && { ...current, armorClass })
+                          }
+                          placeholder="10"
+                          placeholderTextColor="#8D969C"
+                          style={styles.enemyHpInput}
+                          value={enemyForm.armorClass}
+                        />
+                      </View>
                       <View style={styles.enemyQuantityInitiativeRow}>
                         <Text style={styles.enemyFormLabel}>Quantity</Text>
                         <View style={styles.enemyQuantityControl}>
@@ -2703,6 +2976,83 @@ export default function CampaignDetailScreen() {
                           ? `All ${enemyForm.quantity || '0'} enemies act on one initiative turn.`
                           : 'Each enemy gets a separate turn in initiative.'}
                       </Text>
+                      <View style={styles.enemyArrivalPanel}>
+                        <Text style={styles.enemyFormLabel}>Reinforcement arrival</Text>
+                        <View style={styles.enemyModeOptions}>
+                          {([
+                            ['round', 'Round'],
+                            ['dm', 'When Decided'],
+                          ] as const).map(([mode, label]) => (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityState={{ selected: enemyForm.arrivalMode === mode }}
+                              key={mode}
+                              onPress={() =>
+                                setEnemyForm((current) =>
+                                  current && { ...current, arrivalMode: mode },
+                                )
+                              }
+                              style={[
+                                styles.enemyModeButton,
+                                enemyForm.arrivalMode === mode && styles.enemyModeButtonSelected,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.enemyModeButtonText,
+                                  enemyForm.arrivalMode === mode &&
+                                    styles.enemyModeButtonTextSelected,
+                                ]}
+                              >
+                                {label}
+                              </Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                        {enemyForm.arrivalMode === 'round' ? (
+                          <View style={styles.enemyArrivalRoundRow}>
+                            <Text style={styles.enemyArrivalDescription}>
+                              Add this group at the start of the selected combat round.
+                            </Text>
+                            <TextInput
+                              accessibilityLabel="Enemy arrival round"
+                              keyboardType="number-pad"
+                              maxLength={3}
+                              onChangeText={(arrivalRound) =>
+                                setEnemyForm((current) =>
+                                  current && { ...current, arrivalRound },
+                                )
+                              }
+                              placeholder="1"
+                              placeholderTextColor="#8D969C"
+                              style={styles.enemyArrivalRoundInput}
+                              value={enemyForm.arrivalRound}
+                            />
+                          </View>
+                        ) : (
+                          <>
+                            <Text style={styles.enemyArrivalDescription}>
+                              Keep this group scheduled. After the trigger happens, activate it from
+                              the online lobby.
+                            </Text>
+                            <TextInput
+                              accessibilityLabel="Reinforcement trigger note"
+                              autoCapitalize="sentences"
+                              maxLength={200}
+                              multiline
+                              onChangeText={(arrivalNote) =>
+                                setEnemyForm((current) =>
+                                  current && { ...current, arrivalNote },
+                                )
+                              }
+                              placeholder="Optional trigger note (e.g. cries for help)"
+                              placeholderTextColor="#8D969C"
+                              style={styles.enemyArrivalNoteInput}
+                              value={enemyForm.arrivalNote}
+                            />
+                          </>
+                        )}
+                      </View>
                     </>
                   )}
                   {enemyFormError && <Text style={styles.errorText}>{enemyFormError}</Text>}
@@ -2721,7 +3071,9 @@ export default function CampaignDetailScreen() {
                     {isSavingEnemyPreset
                       ? 'Saving custom enemy…'
                       : enemyForm
-                        ? `${enemyForm.imageUri ? 'Save & Add' : 'Add'} ${enemyForm.quantity} ${enemyForm.name || 'Enemy'}${Number(enemyForm.quantity) === 1 ? '' : 's'}`
+                        ? editingEnemyIndex === null
+                          ? `${enemyForm.imageUri ? 'Save & Add' : 'Add'} ${enemyForm.quantity} ${enemyForm.name || 'Enemy'}${Number(enemyForm.quantity) === 1 ? '' : 's'}`
+                          : `Save ${enemyForm.name || 'Enemy'}`
                         : 'Choose a preset'}
                   </Text>
                 </Pressable>
@@ -2739,6 +3091,18 @@ export default function CampaignDetailScreen() {
       >
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, styles.onlineLobbyModal]}>
+            {onlineLobby?.combat_started && onlineCombatBackground && (
+              <View pointerEvents="none" style={styles.onlineLobbyBackground}>
+                <ImageBackground
+                  resizeMode="cover"
+                  source={onlineCombatBackground}
+                  style={StyleSheet.absoluteFill}
+                  imageStyle={styles.onlineLobbyBackgroundImage}
+                >
+                  <View style={styles.onlineLobbyBackgroundShade} />
+                </ImageBackground>
+              </View>
+            )}
             <Text style={styles.modalTitle}>{onlineLobby?.encounter_name}</Text>
             <Text style={styles.modalDescription}>
               {onlineLobby?.role === 'dm'
@@ -2786,9 +3150,312 @@ export default function CampaignDetailScreen() {
                   </View>
                 );
               })}
-              <Text style={[styles.lobbySectionTitle, styles.onlineCharactersTitle]}>
-                CHARACTERS
-              </Text>
+              {onlineLobby?.role === 'player' && (
+                <Text style={[styles.lobbySectionTitle, styles.onlineCharactersTitle]}>
+                  CHARACTERS
+                </Text>
+              )}
+              {onlineLobby?.role === 'dm' && (
+                <>
+                  {onlineInitiativeResultsInOrder.length > 0 && (
+                    <>
+                      <Text style={[styles.lobbySectionTitle, styles.onlineCharactersTitle]}>
+                        INITIATIVE ORDER
+                      </Text>
+                      {onlineInitiativeResultsInOrder.map((result) => (
+                        <View key={`initiative-order-${result.initiative_key}`} style={styles.onlineMemberRow}>
+                          <View style={styles.onlineMemberText}>
+                            <Text numberOfLines={1} style={styles.lobbyMemberName}>
+                              {result.name}
+                            </Text>
+                            <Text numberOfLines={1} style={styles.lobbyMemberClass}>
+                              {result.participant_type === 'character'
+                                ? 'Player character'
+                                : result.participant_type === 'ally' ? 'NPC' : 'Enemy'}
+                              {' · '}{result.raw_roll} {result.bonus >= 0 ? '+' : '−'}{' '}
+                              {Math.abs(result.bonus)} = {result.total}
+                            </Text>
+                          </View>
+                        </View>
+                      ))}
+                    </>
+                  )}
+                  <Text style={[styles.lobbySectionTitle, styles.onlineCharactersTitle]}>
+                    PARTY INITIATIVE
+                  </Text>
+                  {onlineCharactersInDisplayOrder.map((character) => {
+                    const result = onlineResultsByKey.get(`character:${character.character_id}`);
+                    const claimant = onlineLobby.members.find(
+                      (member) => member.claimed_character_id === character.character_id,
+                    );
+                    return (
+                      <View key={`party-result-${character.character_id}`} style={styles.onlineMemberRow}>
+                        <View style={styles.onlineMemberText}>
+                          <Text numberOfLines={1} style={styles.lobbyMemberName}>
+                            {character.name}
+                          </Text>
+                          <Text numberOfLines={1} style={styles.lobbyMemberClass}>
+                            {character.class_name} · Bonus {character.initiative_bonus >= 0 ? '+' : ''}
+                            {character.initiative_bonus}
+                          </Text>
+                          <Text numberOfLines={1} style={styles.onlineLobbyStatus}>
+                            {result
+                              ? `${result.raw_roll} ${result.bonus >= 0 ? '+' : '−'} ${Math.abs(result.bonus)} = ${result.total} · Ready`
+                              : claimant
+                                ? `Waiting · ${claimant.display_name}`
+                                : 'Waiting for a player to claim'}
+                          </Text>
+                        </View>
+                        {result && (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Reset ${character.name} initiative`}
+                            disabled={isOnlineLobbyBusy || onlineLobby.combat_started}
+                            onPress={() => void handleResetOnlineInitiative(
+                              `character:${character.character_id}`,
+                            )}
+                            style={[
+                              styles.initiativeResetButton,
+                              (isOnlineLobbyBusy || onlineLobby.combat_started) &&
+                                styles.disabledAction,
+                            ]}
+                          >
+                            <Text style={styles.initiativeResetText}>Reset</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    );
+                  })}
+                  <Text style={[styles.lobbySectionTitle, styles.onlineCharactersTitle]}>
+                    ENEMY & NPC INITIATIVE
+                  </Text>
+                  <View style={styles.dmRollActions}>
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={
+                        isOnlineLobbyBusy ||
+                        onlineLobby.combat_started ||
+                        unrolledOnlineDmParticipants.length === 0
+                      }
+                      onPress={() => void handleSubmitDmInitiative([], { rollUnrolled: true })}
+                      style={[
+                        styles.onlineLobbyAction,
+                        (isOnlineLobbyBusy ||
+                          onlineLobby.combat_started ||
+                          unrolledOnlineDmParticipants.length === 0) &&
+                          styles.disabledAction,
+                      ]}
+                    >
+                      <Text style={styles.onlineLobbyActionText}>
+                        Roll Unrolled ({unrolledOnlineDmParticipants.length})
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={
+                        isOnlineLobbyBusy ||
+                        onlineLobby.combat_started ||
+                        selectedOnlineInitiativeKeys.filter(
+                          (key) => !onlineResultsByKey.has(key),
+                        ).length === 0
+                      }
+                      onPress={() => void handleSubmitDmInitiative(
+                        selectedOnlineInitiativeKeys.filter(
+                          (key) => !onlineResultsByKey.has(key),
+                        ),
+                      )}
+                      style={[
+                        styles.onlineLobbyAction,
+                        (isOnlineLobbyBusy ||
+                          onlineLobby.combat_started ||
+                          selectedOnlineInitiativeKeys.filter(
+                            (key) => !onlineResultsByKey.has(key),
+                          ).length === 0) && styles.disabledAction,
+                      ]}
+                    >
+                      <Text style={styles.onlineLobbyActionText}>
+                        Roll Selected ({
+                          selectedOnlineInitiativeKeys.filter(
+                            (key) => !onlineResultsByKey.has(key),
+                          ).length
+                        })
+                      </Text>
+                    </Pressable>
+                  </View>
+                  {onlineDmParticipantsInDisplayOrder.map((participant) => {
+                    const result = onlineResultsByKey.get(participant.initiative_key);
+                    const manualInput =
+                      onlineInitiativeInputs[participant.initiative_key] ?? '';
+                    const parsedManualRoll = /^\d+$/.test(manualInput)
+                      ? Number(manualInput)
+                      : Number.NaN;
+                    const selected = selectedOnlineInitiativeKeys.includes(
+                      participant.initiative_key,
+                    );
+                    const waitingStatus = [
+                      participant.active_count > 0 && `Active ${participant.active_count}`,
+                      participant.hidden_count > 0 && `Hidden ${participant.hidden_count}`,
+                      participant.scheduled_count > 0 &&
+                        `Scheduled ${participant.scheduled_count} · arrives round ${participant.arrival_round}`,
+                      participant.waiting_count > 0 && `Waiting ${participant.waiting_count}`,
+                      participant.defeated_count > 0 && `Defeated ${participant.defeated_count}`,
+                      participant.inactive_count > 0 && `Inactive ${participant.inactive_count}`,
+                    ].filter(Boolean).join(' · ') || 'Waiting';
+                    const isHorde =
+                      participant.initiative_mode === 'horde' && participant.member_count > 1;
+                    return (
+                      <View key={participant.initiative_key} style={styles.dmParticipantCard}>
+                        <View style={styles.dmParticipantTopRow}>
+                          {!result && (
+                            <Pressable
+                              accessibilityRole="checkbox"
+                              accessibilityState={{
+                                checked: selected,
+                                disabled: isOnlineLobbyBusy || onlineLobby.combat_started,
+                              }}
+                              disabled={
+                                isOnlineLobbyBusy ||
+                                onlineLobby.status !== 'open' ||
+                                onlineLobby.combat_started
+                              }
+                              onPress={() => toggleOnlineInitiativeSelection(
+                                participant.initiative_key,
+                              )}
+                              style={[
+                                styles.dmParticipantCheckbox,
+                                selected && styles.dmParticipantCheckboxSelected,
+                              ]}
+                            >
+                              <Text style={styles.dmParticipantCheckboxText}>
+                                {selected ? '✓' : ''}
+                              </Text>
+                            </Pressable>
+                          )}
+                          {participant.participant_type === 'enemy' && participant.image_id && (
+                            <Image
+                              accessibilityLabel={`${participant.name} portrait`}
+                              resizeMode="cover"
+                              source={getEnemyImage(
+                                participant.image_id,
+                                campaign?.customEnemyPresets,
+                              )}
+                              style={styles.lobbyMemberPortrait}
+                            />
+                          )}
+                          <View style={styles.onlineMemberText}>
+                            <Text numberOfLines={1} style={styles.lobbyMemberName}>
+                              {participant.name}
+                            </Text>
+                            <Text numberOfLines={2} style={styles.lobbyMemberClass}>
+                              {isHorde
+                                ? `${participant.member_count} separate members · one shared initiative`
+                                : participant.participant_type === 'ally'
+                                  ? 'NPC'
+                                  : 'Enemy'}
+                              {' · '}{waitingStatus}
+                              {' · Bonus '}{participant.initiative_bonus >= 0 ? '+' : ''}
+                              {participant.initiative_bonus}
+                            </Text>
+                          </View>
+                        </View>
+                        {result ? (
+                          <View style={styles.dmResultRow}>
+                            <Text style={styles.initiativeSubmissionResult}>
+                              {result.raw_roll} {result.bonus >= 0 ? '+' : '−'} {Math.abs(result.bonus)} = {result.total} · Ready
+                            </Text>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Reset ${participant.name} initiative`}
+                              disabled={isOnlineLobbyBusy || onlineLobby.combat_started}
+                              onPress={() => void handleResetOnlineInitiative(
+                                participant.initiative_key,
+                              )}
+                              style={[
+                                styles.initiativeResetButton,
+                                (isOnlineLobbyBusy || onlineLobby.combat_started) &&
+                                  styles.disabledAction,
+                              ]}
+                            >
+                              <Text style={styles.initiativeResetText}>Reset</Text>
+                            </Pressable>
+                          </View>
+                        ) : (
+                          <>
+                            <View style={styles.dmParticipantActions}>
+                              <Pressable
+                                accessibilityRole="button"
+                                disabled={
+                                  isOnlineLobbyBusy ||
+                                  onlineLobby.status !== 'open' ||
+                                  onlineLobby.combat_started
+                                }
+                                onPress={() => void handleSubmitDmInitiative([
+                                  participant.initiative_key,
+                                ])}
+                                style={[
+                                  styles.characterClaimButton,
+                                  (isOnlineLobbyBusy ||
+                                    onlineLobby.status !== 'open' ||
+                                    onlineLobby.combat_started) && styles.disabledAction,
+                                ]}
+                              >
+                                <Text style={styles.characterClaimText}>Roll d20</Text>
+                              </Pressable>
+                              <TextInput
+                                accessibilityLabel={`${participant.name} raw d20 result`}
+                                keyboardType="number-pad"
+                                maxLength={2}
+                                onChangeText={(value) => setOnlineInitiativeInputs(
+                                  (current) => ({
+                                    ...current,
+                                    [participant.initiative_key]: value,
+                                  }),
+                                )}
+                                placeholder="d20"
+                                placeholderTextColor="#887A64"
+                                style={styles.dmManualRollInput}
+                                value={manualInput}
+                              />
+                              <Pressable
+                                accessibilityRole="button"
+                                disabled={
+                                  isOnlineLobbyBusy ||
+                                  onlineLobby.status !== 'open' ||
+                                  onlineLobby.combat_started ||
+                                  !Number.isInteger(parsedManualRoll) ||
+                                  parsedManualRoll < 1 ||
+                                  parsedManualRoll > 20
+                                }
+                                onPress={() => void handleSubmitDmInitiative(
+                                  [participant.initiative_key],
+                                  { rawRoll: parsedManualRoll },
+                                )}
+                                style={[
+                                  styles.characterClaimButton,
+                                  (isOnlineLobbyBusy ||
+                                    onlineLobby.status !== 'open' ||
+                                    onlineLobby.combat_started ||
+                                    !Number.isInteger(parsedManualRoll) ||
+                                    parsedManualRoll < 1 ||
+                                    parsedManualRoll > 20) && styles.disabledAction,
+                                ]}
+                              >
+                                <Text style={styles.characterClaimText}>Enter Roll</Text>
+                              </Pressable>
+                            </View>
+                            <Text style={styles.onlineLobbyStatus}>
+                              Enter raw d20 result; the saved DM bonus is added automatically.
+                            </Text>
+                          </>
+                        )}
+                      </View>
+                    );
+                  })}
+                  {onlineDmParticipantsInDisplayOrder.length === 0 && (
+                    <Text style={styles.onlineLobbyStatus}>No enemies or NPCs in this encounter.</Text>
+                  )}
+                </>
+              )}
               {onlineLobby?.characters.map((character) => {
                 const claimant = onlineLobby.members.find(
                   (member) => member.claimed_character_id === character.character_id,
@@ -2862,6 +3529,27 @@ export default function CampaignDetailScreen() {
                 {onlineLobbyError}
               </Text>
             )}
+            {onlineLobby?.role === 'dm' && onlineLobby.status === 'open' && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{
+                  disabled: isOnlineLobbyBusy || onlineLobby.combat_started,
+                }}
+                disabled={isOnlineLobbyBusy || onlineLobby.combat_started}
+                onPress={() => void handleStartOnlineCombat()}
+                style={[
+                  styles.onlineLobbyAction,
+                  (isOnlineLobbyBusy || onlineLobby.combat_started) &&
+                    styles.disabledAction,
+                ]}
+              >
+                <Text style={styles.onlineLobbyActionText}>
+                  {onlineLobby.combat_started
+                    ? `Combat Started · Round ${onlineLobby.current_round}`
+                    : isOnlineLobbyBusy ? 'Starting Combat…' : 'Start Combat'}
+                </Text>
+              </Pressable>
+            )}
             <View style={styles.modalActions}>
               {onlineLobby?.role === 'dm' && onlineLobby.status === 'open' ? (
                 <Pressable
@@ -2928,237 +3616,10 @@ export default function CampaignDetailScreen() {
 
       <Modal
         animationType="fade"
-        onRequestClose={() => setIsEncounterLobbyVisible(false)}
-        transparent
-        visible={isEncounterLobbyVisible && Boolean(selectedEncounter)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>{selectedEncounter?.name}</Text>
-            <Text style={styles.modalDescription}>
-              Review initiative before starting. This is a local lobby on this device; player claims and rolls are not shared across devices.
-            </Text>
-            <View style={styles.onlineLobbyCallout}>
-              <Text style={styles.onlineLobbyStatus}>
-                {isSupabaseConfigured()
-                  ? isOnlineIdentityLoading
-                    ? 'Connecting device identity...'
-                    : onlineIdentityError ?? 'Create a shared lobby for players on other devices.'
-                  : 'Connect Supabase using SUPABASE_SETUP.md to enable shared lobbies.'}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                disabled={!isSupabaseConfigured() || isOnlineLobbyBusy}
-                onPress={() => void handleCreateOnlineLobby()}
-                style={[
-                  styles.onlineLobbyAction,
-                  (!isSupabaseConfigured() || isOnlineLobbyBusy) && styles.disabledAction,
-                ]}
-              >
-                <Text style={styles.onlineLobbyActionText}>
-                  {isOnlineLobbyBusy ? 'Opening…' : 'Open Shared Online Lobby'}
-                </Text>
-              </Pressable>
-              {onlineLobbyError && (
-                <Text accessibilityLiveRegion="polite" style={styles.errorText}>
-                  {onlineLobbyError}
-                </Text>
-              )}
-            </View>
-            <ScrollView style={styles.lobbyRoster}>
-              <Text style={styles.lobbySectionTitle}>
-                PARTY · {activeCharacters.length + (selectedEncounter?.allies?.length ?? 0)}
-              </Text>
-              {activeCharacters.map((character) => (
-                <View key={character.id} style={styles.lobbyInitiativeEntry}>
-                  <View style={styles.lobbyMemberRow}>
-                    {getCharacterPortraitSource(character.portraitPresetId, character.portraitUri) ? (
-                      <Image
-                        accessibilityLabel={`${character.name} portrait`}
-                        resizeMode="cover"
-                        source={getCharacterPortraitSource(
-                          character.portraitPresetId,
-                          character.portraitUri,
-                        )}
-                        style={styles.lobbyMemberPortrait}
-                      />
-                    ) : (
-                      <View style={styles.lobbyMemberInitial}>
-                        <Text style={styles.lobbyMemberInitialText}>
-                          {character.name.charAt(0).toUpperCase()}
-                        </Text>
-                      </View>
-                    )}
-                    <View style={styles.lobbyMemberInfo}>
-                      <Text numberOfLines={1} style={styles.lobbyMemberName}>
-                        {character.name}
-                      </Text>
-                      <Text numberOfLines={1} style={styles.lobbyMemberClass}>
-                        {character.className} · Bonus {character.initiative >= 0 ? '+' : ''}
-                        {character.initiative}
-                      </Text>
-                    </View>
-                  </View>
-                  {renderInitiativeSubmission(
-                    getCampaignInitiativeKey('character', character.id),
-                    character.name,
-                    character.initiative,
-                  )}
-                </View>
-              ))}
-              {selectedEncounter?.allies?.map((ally) => (
-                <View key={ally.id} style={styles.lobbyInitiativeEntry}>
-                  <View style={styles.lobbyMemberRow}>
-                    {getCharacterPortraitSource(ally.portraitPresetId, ally.portraitUri) ? (
-                      <Image
-                        accessibilityLabel={`${ally.name} portrait`}
-                        resizeMode="cover"
-                        source={getCharacterPortraitSource(
-                          ally.portraitPresetId,
-                          ally.portraitUri,
-                        )}
-                        style={styles.lobbyMemberPortrait}
-                      />
-                    ) : (
-                      <View style={styles.lobbyMemberInitial}>
-                        <Text style={styles.lobbyMemberInitialText}>
-                          {ally.name.charAt(0).toUpperCase()}
-                        </Text>
-                      </View>
-                    )}
-                    <View style={styles.lobbyMemberInfo}>
-                      <Text numberOfLines={1} style={styles.lobbyMemberName}>
-                        {ally.name}
-                      </Text>
-                      <Text numberOfLines={1} style={styles.lobbyMemberClass}>
-                        {ally.race ? `${ally.race} · ` : ''}
-                        {ally.className} · Temporary ally · Bonus {ally.initiative >= 0 ? '+' : ''}
-                        {ally.initiative}
-                      </Text>
-                    </View>
-                  </View>
-                  {renderInitiativeSubmission(
-                    getCampaignInitiativeKey('ally', ally.id),
-                    ally.name,
-                    ally.initiative,
-                  )}
-                </View>
-              ))}
-              <Text style={[styles.lobbySectionTitle, styles.lobbyEnemyHeader]}>
-                ENEMIES ·
-                {' '}
-                {selectedEncounter?.enemies.reduce(
-                  (total, enemy) => total + (enemy.quantity ?? 1),
-                  0,
-                ) ?? 0}
-              </Text>
-              {unrolledNonPlayerParticipants.length > 0 && (
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={isUpdatingCombat}
-                  onPress={() => void handleRollUnrolledEnemies()}
-                  style={styles.rollUnrolledButton}
-                >
-                  <Text style={styles.rollUnrolledText}>
-                    {isUpdatingCombat ? 'Rolling…' : `Roll Unrolled (${unrolledNonPlayerParticipants.length})`}
-                  </Text>
-                </Pressable>
-              )}
-              {selectedEncounter?.enemies.flatMap((enemy) => {
-                const quantity = enemy.quantity ?? 1;
-                const isHorde = enemy.initiativeMode === 'horde' && quantity > 1;
-                const count = isHorde ? 1 : quantity;
-                return Array.from({ length: count }, (_, index) => {
-                  const participantId = getCampaignInitiativeKey(
-                    'enemy',
-                    enemy.id,
-                    index,
-                    isHorde,
-                  );
-                  const name = isHorde
-                    ? `${enemy.name} Horde`
-                    : quantity === 1
-                      ? enemy.name
-                      : `${enemy.name} ${index + 1}`;
-                  return (
-                    <View key={participantId} style={styles.lobbyInitiativeEntry}>
-                      <View style={styles.lobbyMemberRow}>
-                        <Image
-                          accessibilityLabel={`${name} preset image`}
-                          resizeMode="cover"
-                          source={getEnemyImage(enemy.imageId, campaign?.customEnemyPresets)}
-                          style={styles.lobbyMemberPortrait}
-                        />
-                        <View style={styles.lobbyMemberInfo}>
-                          <Text numberOfLines={1} style={styles.lobbyMemberName}>
-                            {name}
-                          </Text>
-                          <Text numberOfLines={1} style={styles.lobbyMemberClass}>
-                            {isHorde
-                              ? `${quantity} creatures · one shared turn`
-                              : 'Enemy · Individual'}{' '}
-                            · Bonus {enemy.initiative >= 0 ? '+' : ''}
-                            {enemy.initiative}
-                          </Text>
-                        </View>
-                      </View>
-                      {renderInitiativeSubmission(participantId, name, enemy.initiative)}
-                    </View>
-                  );
-                });
-              })}
-            </ScrollView>
-            {missingInitiativeNames.length > 0 && (
-              <Text style={styles.errorText}>
-                Waiting for initiative: {missingInitiativeNames.join(', ')}.
-              </Text>
-            )}
-            {activeCharacters.length === 0 && (selectedEncounter?.allies?.length ?? 0) === 0 && (
-              <Text style={styles.errorText}>
-                Add an active party member or temporary ally before starting combat.
-              </Text>
-            )}
-            <View style={styles.modalActions}>
-              <Pressable
-                accessibilityRole="button"
-                disabled={isUpdatingCombat}
-                onPress={() => setIsEncounterLobbyVisible(false)}
-                style={styles.cancelButton}
-              >
-                <Text style={styles.cancelText}>Back</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                disabled={
-                  isUpdatingCombat ||
-                  (activeCharacters.length === 0 && (selectedEncounter?.allies?.length ?? 0) === 0) ||
-                  missingInitiativeNames.length > 0 ||
-                  Boolean(campaign?.combat)
-                }
-                onPress={() => selectedEncounter && void handleStartEncounter(selectedEncounter)}
-                style={[
-                  styles.saveButton,
-                  ((activeCharacters.length === 0 &&
-                    (selectedEncounter?.allies?.length ?? 0) === 0) ||
-                    missingInitiativeNames.length > 0 ||
-                    campaign?.combat) &&
-                    styles.encounterDisabledButton,
-                ]}
-              >
-                <Text style={styles.saveText}>
-                  {isUpdatingCombat ? 'Starting...' : 'Start Combat'}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        animationType="fade"
         onRequestClose={() => {
           setIsCharacterMenuVisible(false);
           setIsEditingInitiative(false);
+          setIsEditingArmorClass(false);
           setIsCharacterDeleteConfirmVisible(false);
         }}
         transparent
@@ -3171,6 +3632,8 @@ export default function CampaignDetailScreen() {
                 ? 'Delete Character?'
                 : isEditingInitiative
                   ? 'Change Initiative'
+                  : isEditingArmorClass
+                    ? 'Change AC'
                 : selectedCharacter?.name ?? 'Character'}
             </Text>
             <Text style={styles.modalDescription}>
@@ -3178,48 +3641,76 @@ export default function CampaignDetailScreen() {
                 ? 'This permanently removes the character from this campaign.'
                 : isEditingInitiative
                   ? 'Set the initiative modifier from −4 to +10.'
+                  : isEditingArmorClass
+                    ? 'Set Armor Class to a whole number from 1 to 40.'
                 : selectedCharacter?.status === 'dead'
                   ? 'This character is in the Graveyard.'
                   : selectedCharacter?.status === 'stored'
                     ? 'Stored characters are not included in combat.'
                     : 'Manage this character in your campaign.'}
             </Text>
-            {isEditingInitiative && !isCharacterDeleteConfirmVisible ? (
+            {(isEditingInitiative || isEditingArmorClass) &&
+            !isCharacterDeleteConfirmVisible ? (
               <>
-                <View style={styles.initiativeHeader}>
-                  <Text style={styles.fieldLabel}>Initiative Modifier</Text>
-                  <Text accessibilityLiveRegion="polite" style={styles.initiativeValue}>
-                    {editedInitiative >= 0 ? '+' : ''}
-                    {editedInitiative}
-                  </Text>
-                </View>
-                <Slider
-                  accessibilityLabel="Initiative modifier"
-                  accessibilityValue={{
-                    min: -4,
-                    max: 10,
-                    now: editedInitiative,
-                    text: `${editedInitiative >= 0 ? '+' : ''}${editedInitiative}`,
-                  }}
-                  maximumTrackTintColor="#5B513F"
-                  maximumValue={10}
-                  minimumTrackTintColor="#D9A64D"
-                  minimumValue={-4}
-                  onValueChange={(value) => setEditedInitiative(Math.round(value))}
-                  step={1}
-                  style={styles.initiativeSlider}
-                  thumbTintColor="#F4DDAE"
-                  value={editedInitiative}
-                />
-                <View style={styles.sliderLimits}>
-                  <Text style={styles.sliderLimitText}>−4</Text>
-                  <Text style={styles.sliderLimitText}>+10</Text>
-                </View>
+                {isEditingInitiative ? (
+                  <>
+                    <View style={styles.initiativeHeader}>
+                      <Text style={styles.fieldLabel}>Initiative Modifier</Text>
+                      <Text accessibilityLiveRegion="polite" style={styles.initiativeValue}>
+                        {editedInitiative >= 0 ? '+' : ''}
+                        {editedInitiative}
+                      </Text>
+                    </View>
+                    <Slider
+                      accessibilityLabel="Initiative modifier"
+                      accessibilityValue={{
+                        min: -4,
+                        max: 10,
+                        now: editedInitiative,
+                        text: `${editedInitiative >= 0 ? '+' : ''}${editedInitiative}`,
+                      }}
+                      maximumTrackTintColor="#5B513F"
+                      maximumValue={10}
+                      minimumTrackTintColor="#D9A64D"
+                      minimumValue={-4}
+                      onValueChange={(value) => setEditedInitiative(Math.round(value))}
+                      step={1}
+                      style={styles.initiativeSlider}
+                      thumbTintColor="#F4DDAE"
+                      value={editedInitiative}
+                    />
+                    <View style={styles.sliderLimits}>
+                      <Text style={styles.sliderLimitText}>−4</Text>
+                      <Text style={styles.sliderLimitText}>+10</Text>
+                    </View>
+                  </>
+                ) : (
+                  <View style={styles.armorClassInputRow}>
+                    <Text style={styles.fieldLabel}>AC (Armor Class)</Text>
+                    <TextInput
+                      accessibilityLabel={`Armor Class for ${selectedCharacter?.name ?? 'character'}`}
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      onChangeText={(value) => {
+                        setEditedArmorClass(value);
+                        setActionError(null);
+                      }}
+                      placeholder="10"
+                      placeholderTextColor="#8D806B"
+                      style={styles.armorClassInput}
+                      value={editedArmorClass}
+                    />
+                  </View>
+                )}
+                {actionError && <Text style={styles.errorText}>{actionError}</Text>}
                 <View style={styles.modalActions}>
                   <Pressable
                     accessibilityRole="button"
                     disabled={isUpdatingCharacter}
-                    onPress={() => setIsEditingInitiative(false)}
+                    onPress={() => {
+                      setIsEditingInitiative(false);
+                      setIsEditingArmorClass(false);
+                    }}
                     style={styles.cancelButton}
                   >
                     <Text style={styles.cancelText}>Cancel</Text>
@@ -3227,11 +3718,17 @@ export default function CampaignDetailScreen() {
                   <Pressable
                     accessibilityRole="button"
                     disabled={isUpdatingCharacter}
-                    onPress={() => void handleSaveInitiative()}
+                    onPress={() => void (
+                      isEditingInitiative
+                        ? handleSaveInitiative()
+                        : handleSaveArmorClass()
+                    )}
                     style={styles.saveButton}
                   >
                     <Text style={styles.saveText}>
-                      {isUpdatingCharacter ? 'Saving...' : 'Save Initiative'}
+                      {isUpdatingCharacter
+                        ? 'Saving...'
+                        : isEditingInitiative ? 'Save Initiative' : 'Save AC'}
                     </Text>
                   </Pressable>
                 </View>
@@ -3265,11 +3762,24 @@ export default function CampaignDetailScreen() {
                   onPress={() => {
                     setEditedInitiative(selectedCharacter?.initiative ?? 0);
                     setIsEditingInitiative(true);
+                    setIsEditingArmorClass(false);
                     setActionError(null);
                   }}
                   style={styles.characterAction}
                 >
                   <Text style={styles.characterActionText}>Change Initiative</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isUpdatingCharacter}
+                  onPress={() => {
+                    setEditedArmorClass(String(selectedCharacter?.armorClass ?? 10));
+                    setIsEditingArmorClass(true);
+                    setActionError(null);
+                  }}
+                  style={styles.characterAction}
+                >
+                  <Text style={styles.characterActionText}>Change AC</Text>
                 </Pressable>
                 {selectedCharacter?.status === 'active' && (
                   <>
@@ -3359,16 +3869,135 @@ export default function CampaignDetailScreen() {
           (isAddingCombatAlly && isEncounterEditorVisible)
         }
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.combatModal}>
-            <Text style={styles.modalTitle}>{isAddingCombatAlly ? 'Add Ally' : 'Combat'}</Text>
+        <View
+          style={[
+            styles.modalBackdrop,
+            !isAddingCombatAlly && styles.combatScreenBackdrop,
+          ]}
+        >
+          <View
+            style={[
+              isAddingCombatAlly ? styles.combatModal : styles.combatFullScreen,
+              !isAddingCombatAlly && {
+                paddingTop: insets.top + 8,
+                paddingBottom: insets.bottom + 10,
+                paddingHorizontal: windowWidth < 420 ? 16 : 24,
+              },
+            ]}
+          >
             {!isAddingCombatAlly && (
-              <Text style={styles.combatRound}>Round {campaign?.combat?.round ?? 1}</Text>
+              <View pointerEvents="none" style={styles.combatArtLayer}>
+                <ImageBackground
+                  resizeMode="cover"
+                  source={
+                    activeCombatBackground ??
+                    require('../../../assets/images/combat-background.png')
+                  }
+                  style={styles.combatScreenBackground}
+                  imageStyle={styles.combatScreenBackgroundImage}
+                >
+                  <View style={styles.combatScreenBackgroundShade} />
+                </ImageBackground>
+                <Image
+                  accessibilityElementsHidden
+                  resizeMode="contain"
+                  source={require('../../../assets/images/lobby-ornaments/dragon-left-corner.png')}
+                  style={[styles.combatDragonCorner, styles.combatDragonLeft]}
+                />
+                <Image
+                  accessibilityElementsHidden
+                  resizeMode="contain"
+                  source={require('../../../assets/images/lobby-ornaments/dragon-right-corner.png')}
+                  style={[styles.combatDragonCorner, styles.combatDragonRight]}
+                />
+                <Image
+                  accessibilityElementsHidden
+                  resizeMode="contain"
+                  source={require('../../../assets/images/lobby-ornaments/acanthus-corner.png')}
+                  style={[styles.combatBottomFlourish, styles.combatBottomFlourishLeft]}
+                />
+                <Image
+                  accessibilityElementsHidden
+                  resizeMode="contain"
+                  source={require('../../../assets/images/lobby-ornaments/acanthus-corner.png')}
+                  style={[styles.combatBottomFlourish, styles.combatBottomFlourishRight]}
+                />
+              </View>
             )}
-            {!isAddingCombatAlly && currentCharacter && (
-              <Text style={styles.currentTurn}>
-                Current turn: {currentCharacter.name}
-              </Text>
+            {!isAddingCombatAlly && (
+              <>
+                <View style={[styles.combatHeader, windowWidth < 420 && styles.combatHeaderCompact]}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close combat tracker"
+                    hitSlop={8}
+                    onPress={() => setIsCombatModalVisible(false)}
+                    style={styles.combatBackButton}
+                  >
+                    <CombatIcon name="arrow.left" size={20} />
+                  </Pressable>
+                  <View style={styles.combatHeaderTitles}>
+                    <Text style={styles.combatScreenTitle}>Combat</Text>
+                    <Text style={styles.combatEncounterName}>
+                      {activeCombatEncounter?.name ?? campaign?.name ?? 'Encounter'}
+                    </Text>
+                  </View>
+                  <View style={styles.combatLiveBadge}>
+                    <CombatIcon name="checkmark" size={14} color="#74D69A" />
+                    <Text style={styles.combatLiveText}>LIVE</Text>
+                  </View>
+                </View>
+                <View style={styles.combatHeaderDivider} />
+                <View style={styles.combatRoundBar}>
+                  <Text style={styles.combatRound}>Round {campaign?.combat?.round ?? 1}</Text>
+                  <View style={styles.combatRoundDivider} />
+                  <View style={styles.combatRoundLive}>
+                    <View style={styles.combatLiveDot} />
+                    <Text style={styles.combatRoundLiveText}>In Progress</Text>
+                  </View>
+                </View>
+                {currentCharacter && (
+                  <View style={styles.currentTurnCard}>
+                    <View style={styles.currentTurnHeader}>
+                      <Text style={styles.currentTurnEyebrow}>CURRENT TURN</Text>
+                      <View style={styles.currentTurnDivider} />
+                    </View>
+                    <View style={styles.currentTurnContent}>
+                      {currentTurnPortrait ? (
+                        <Image
+                          accessibilityLabel={`${currentCharacter.name} portrait`}
+                          resizeMode="cover"
+                          source={currentTurnPortrait}
+                          style={styles.currentTurnPortrait}
+                        />
+                      ) : (
+                        <View style={styles.currentTurnPortraitFallback}>
+                          <Text style={styles.currentTurnPortraitInitial}>
+                            {currentCharacter.name.charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.currentTurnInfo}>
+                        <Text style={styles.currentTurnName}>{currentCharacter.name}</Text>
+                        <Text style={styles.currentTurnClass}>
+                          {currentCharacter.className ??
+                            (currentCharacter.imageId ? 'Enemy' : 'Combatant')}
+                        </Text>
+                      </View>
+                      <Text style={styles.currentTurnInitiative}>
+                        {currentCharacter.initiative}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                <View style={styles.initiativeSectionHeading}>
+                  <Text style={styles.initiativeSectionTitle}>INITIATIVE ORDER</Text>
+                  <View style={styles.initiativeSectionDivider} />
+                </View>
+              </>
+            )}
+            {isAddingCombatAlly && (
+              <Text style={styles.modalTitle}>Add Ally</Text>
             )}
             {isAddingCombatAlly ? (
               <ScrollView
@@ -3414,6 +4043,17 @@ export default function CampaignDetailScreen() {
                   placeholderTextColor="#8D806B"
                   style={styles.modalInput}
                   value={combatAllyMaxHp}
+                />
+                <Text style={styles.fieldLabel}>AC (Armor Class)</Text>
+                <TextInput
+                  accessibilityLabel="Ally AC (Armor Class)"
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  onChangeText={setCombatAllyArmorClass}
+                  placeholder="10"
+                  placeholderTextColor="#8D806B"
+                  style={styles.modalInput}
+                  value={combatAllyArmorClass}
                 />
                 <Text style={styles.fieldLabel}>Class</Text>
                 <View style={styles.classOptions}>
@@ -3542,104 +4182,137 @@ export default function CampaignDetailScreen() {
               </ScrollView>
             ) : (
               <>
-                <ScrollView style={styles.initiativeList}>
-                  {initiativeOrder.map((character, index) => (
-                    <View
-                      key={character.id}
-                      style={[
-                        styles.initiativeRow,
-                        character.id === campaign?.combat?.currentCharacterId &&
-                          styles.currentInitiativeRow,
-                      ]}
-                    >
-                      <Text style={styles.initiativeRank}>{index + 1}</Text>
-                      {getCharacterPortraitSource(
-                        character.portraitPresetId,
-                        character.portraitUri,
-                      ) ? (
-                        <Image
-                          accessibilityLabel={`${character.name} portrait`}
-                          resizeMode="cover"
-                          source={getCharacterPortraitSource(
-                            character.portraitPresetId,
-                            character.portraitUri,
-                          )}
-                          style={styles.initiativePortrait}
-                        />
-                      ) : (
-                        <View style={styles.initiativePortraitFallback}>
-                          <Text style={styles.initiativePortraitInitial}>
-                            {character.name.charAt(0).toUpperCase()}
-                          </Text>
-                        </View>
-                      )}
-                      <View style={styles.initiativeCombatantInfo}>
-                        <Text numberOfLines={1} style={styles.initiativeName}>
-                          {character.name}
-                        </Text>
-                        {character.className && (
-                          <Text numberOfLines={1} style={styles.initiativeClass}>
-                            {character.race ? `${character.race} · ` : ''}
-                            {character.className}
-                          </Text>
-                        )}
-                        {character.initiativeRoll !== undefined &&
-                          character.initiativeBonus !== undefined && (
-                            <Text style={styles.initiativeCalculation}>
-                              {character.initiativeRoll}{' '}
-                              {character.initiativeBonus >= 0 ? '+' : '−'}{' '}
-                              {Math.abs(character.initiativeBonus)} = {character.initiative}
+                <ScrollView
+                  contentContainerStyle={styles.initiativeListContent}
+                  style={styles.initiativeList}
+                >
+                  {initiativeOrder.map((character, index) => {
+                    const isCurrentTurn =
+                      character.id === campaign?.combat?.currentCharacterId;
+                    const portraitSource = character.imageId
+                      ? getEnemyImage(character.imageId, campaign?.customEnemyPresets)
+                      : getCharacterPortraitSource(
+                          character.portraitPresetId,
+                          character.portraitUri,
+                        );
+                    const savedCharacter = campaign?.characters?.find(
+                      (item) => item.id === character.id,
+                    );
+                    return (
+                      <View
+                        key={character.id}
+                        style={[
+                          styles.initiativeRow,
+                          isCurrentTurn && styles.currentInitiativeRow,
+                        ]}
+                      >
+                        <Text style={styles.initiativeRank}>{index + 1}</Text>
+                        {portraitSource ? (
+                          <Image
+                            accessibilityLabel={`${character.name} portrait`}
+                            resizeMode="cover"
+                            source={portraitSource}
+                            style={styles.initiativePortrait}
+                          />
+                        ) : (
+                          <View style={styles.initiativePortraitFallback}>
+                            <Text style={styles.initiativePortraitInitial}>
+                              {character.name.charAt(0).toUpperCase()}
                             </Text>
-                          )}
-                      </View>
-                      {character.maxHp !== undefined && (
-                        <View style={styles.combatHpControls}>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={`Damage ${character.name} by 1 HP`}
-                            disabled={isUpdatingCombat || (character.currentHp ?? character.maxHp) <= 0}
-                            onPress={() =>
-                              void handleAdjustCombatantHp(
-                                character.id,
-                                character.currentHp ?? character.maxHp!,
-                                character.maxHp!,
-                                -1,
-                              )
-                            }
-                            style={styles.combatHpButton}
-                          >
-                            <Text style={styles.combatHpButtonText}>−</Text>
-                          </Pressable>
-                          <Text style={styles.combatHpValue}>
-                            {character.currentHp ?? character.maxHp}/{character.maxHp}
+                          </View>
+                        )}
+                        <View style={styles.initiativeCombatantInfo}>
+                          <Text style={styles.initiativeName}>{character.name}</Text>
+                          <Text style={styles.initiativeClass}>
+                            {character.race ? `${character.race} · ` : ''}
+                            {character.className ??
+                              (character.imageId ? 'Enemy' : 'Combatant')}
+                            {' · AC '}
+                            {character.armorClass ?? 10}
                           </Text>
+                          {isCurrentTurn && (
+                            <Text style={styles.initiativeCurrentLabel}>Current turn</Text>
+                          )}
+                          {character.initiativeRoll !== undefined &&
+                            character.initiativeBonus !== undefined && (
+                              <Text style={styles.initiativeCalculation}>
+                                {character.initiativeRoll}{' '}
+                                {character.initiativeBonus >= 0 ? '+' : '−'}{' '}
+                                {Math.abs(character.initiativeBonus)} = {character.initiative}
+                              </Text>
+                            )}
+                          {character.maxHp !== undefined && (
+                            <View style={styles.combatHpControls}>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`Damage ${character.name} by 1 HP`}
+                                disabled={
+                                  isUpdatingCombat ||
+                                  (character.currentHp ?? character.maxHp) <= 0
+                                }
+                                onPress={() =>
+                                  void handleAdjustCombatantHp(
+                                    character.id,
+                                    character.currentHp ?? character.maxHp!,
+                                    character.maxHp!,
+                                    -1,
+                                  )
+                                }
+                                style={styles.combatHpButton}
+                              >
+                                <CombatIcon name="minus" size={14} />
+                              </Pressable>
+                              <Text style={styles.combatHpValue}>
+                                HP {character.currentHp ?? character.maxHp}/{character.maxHp}
+                              </Text>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`Heal ${character.name} by 1 HP`}
+                                disabled={
+                                  isUpdatingCombat ||
+                                  (character.currentHp ?? character.maxHp) >= character.maxHp
+                                }
+                                onPress={() =>
+                                  void handleAdjustCombatantHp(
+                                    character.id,
+                                    character.currentHp ?? character.maxHp!,
+                                    character.maxHp!,
+                                    1,
+                                  )
+                                }
+                                style={styles.combatHpButton}
+                              >
+                                <CombatIcon name="plus" size={14} />
+                              </Pressable>
+                            </View>
+                          )}
+                        </View>
+                        <View style={styles.initiativeScoreBox}>
+                          <Text style={styles.initiativeScore}>{character.initiative}</Text>
+                        </View>
+                        {savedCharacter && (
                           <Pressable
                             accessibilityRole="button"
-                            accessibilityLabel={`Heal ${character.name} by 1 HP`}
-                            disabled={
-                              isUpdatingCombat ||
-                              (character.currentHp ?? character.maxHp) >= character.maxHp
-                            }
-                            onPress={() =>
-                              void handleAdjustCombatantHp(
-                                character.id,
-                                character.currentHp ?? character.maxHp!,
-                                character.maxHp!,
-                                1,
-                              )
-                            }
-                            style={styles.combatHpButton}
+                            accessibilityLabel={`Character options for ${character.name}`}
+                            disabled={isUpdatingCharacter}
+                            hitSlop={6}
+                            onPress={() => {
+                              setActionError(null);
+                              setSelectedCharacter(savedCharacter);
+                              setEditedInitiative(savedCharacter.initiative);
+                              setIsEditingInitiative(false);
+                              setIsEditingArmorClass(false);
+                              setIsCharacterDeleteConfirmVisible(false);
+                              setIsCharacterMenuVisible(true);
+                            }}
+                            style={styles.combatCharacterMenuButton}
                           >
-                            <Text style={styles.combatHpButtonText}>＋</Text>
+                            <CombatIcon name="ellipsis" size={20} color="#DCC9A9" />
                           </Pressable>
-                        </View>
-                      )}
-                      <Text style={styles.initiativeScore}>
-                        {character.initiative >= 0 ? '+' : ''}
-                        {character.initiative}
-                      </Text>
-                    </View>
-                  ))}
+                        )}
+                      </View>
+                    );
+                  })}
                 </ScrollView>
                 {actionError && <Text style={styles.errorText}>{actionError}</Text>}
                 <View style={styles.combatModalActions}>
@@ -3655,9 +4328,14 @@ export default function CampaignDetailScreen() {
                     accessibilityRole="button"
                     disabled={isUpdatingCombat}
                     onPress={() => void handleAdvanceCombat()}
-                    style={styles.saveButton}
+                    style={styles.combatNextTurnButton}
                   >
-                    <Text style={styles.saveText}>{isUpdatingCombat ? '...' : 'Next Turn  ›'}</Text>
+                    <Text style={styles.combatNextTurnText}>
+                      {isUpdatingCombat ? 'Please wait…' : 'Next Turn'}
+                    </Text>
+                    {!isUpdatingCombat && (
+                      <CombatIcon name="arrow.right" size={19} color="#17120A" />
+                    )}
                   </Pressable>
                 </View>
               </>
@@ -3673,14 +4351,24 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#030A12',
-    alignItems: 'center',
-    justifyContent: 'center',
+  },
+  backgroundArtwork: {
+    flex: 1,
+    width: '100%',
+  },
+  backgroundTextureImage: {
+    opacity: 0.16,
   },
   page: {
     flex: 1,
+    width: '100%',
     paddingHorizontal: '4.5%',
     paddingTop: '4%',
     paddingBottom: '3%',
+  },
+  mainContentScroll: {
+    flex: 1,
+    minHeight: 0,
   },
   backButton: {
     height: 40,
@@ -3930,6 +4618,34 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(196, 151, 76, 0.45)',
   },
+  encounterEditorTabs: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 2,
+  },
+  encounterEditorTab: {
+    minHeight: 40,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  encounterEditorTabSelected: {
+    borderBottomColor: '#D9A64D',
+  },
+  encounterEditorTabText: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 14,
+  },
+  encounterEditorTabTextSelected: {
+    color: '#F4DDAE',
+    fontWeight: '700',
+  },
   encounterBackButton: {
     width: 40,
     height: 40,
@@ -3973,6 +4689,78 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 22,
   },
+  reinforcementTabContent: {
+    gap: 12,
+  },
+  reinforcementIntro: {
+    color: '#C8BBA8',
+    fontFamily: 'serif',
+    fontSize: 14,
+    lineHeight: 21,
+    marginBottom: 4,
+  },
+  reinforcementCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 151, 76, 0.42)',
+    borderRadius: 8,
+    backgroundColor: 'rgba(13, 24, 33, 0.92)',
+  },
+  reinforcementPortrait: {
+    width: 52,
+    height: 52,
+    borderWidth: 1,
+    borderColor: '#B78A43',
+    borderRadius: 6,
+  },
+  reinforcementCardInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  reinforcementName: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 16,
+    fontWeight: '700',
+    flexShrink: 1,
+  },
+  reinforcementDetails: {
+    color: '#C8BBA8',
+    fontFamily: 'serif',
+    fontSize: 13,
+    marginTop: 3,
+  },
+  reinforcementEditButton: {
+    minHeight: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#92713F',
+    borderRadius: 6,
+  },
+  reinforcementEditText: {
+    color: '#F0D69F',
+    fontFamily: 'serif',
+    fontSize: 12,
+  },
+  reinforcementEmpty: {
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 151, 76, 0.35)',
+    borderRadius: 8,
+    backgroundColor: 'rgba(13, 24, 33, 0.84)',
+  },
+  reinforcementEmptyText: {
+    color: '#C8BBA8',
+    fontFamily: 'serif',
+    fontSize: 14,
+    lineHeight: 20,
+  },
   encounterFieldLabel: {
     color: '#E6D5B5',
     fontFamily: 'serif',
@@ -3989,6 +4777,47 @@ const styles = StyleSheet.create({
     fontFamily: 'serif',
     fontSize: 16,
     backgroundColor: 'rgba(4, 13, 21, 0.82)',
+  },
+  combatBackgroundPicker: {
+    marginTop: 16,
+  },
+  combatBackgroundHint: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  combatBackgroundOptions: {
+    gap: 9,
+    paddingVertical: 9,
+  },
+  combatBackgroundOption: {
+    width: 112,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#80683D',
+    borderRadius: 7,
+    backgroundColor: '#0B1721',
+  },
+  combatBackgroundOptionSelected: {
+    borderColor: '#F3C45D',
+    shadowColor: '#E8B95F',
+    shadowOpacity: 0.75,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 3,
+  },
+  combatBackgroundThumbnail: {
+    width: '100%',
+    height: 66,
+  },
+  combatBackgroundName: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 11,
+    textAlign: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 3,
   },
   encounterPartyHeading: {
     flexDirection: 'row',
@@ -4591,6 +5420,53 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 7,
   },
+  enemyArrivalPanel: {
+    gap: 8,
+    marginTop: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 151, 76, 0.35)',
+    borderRadius: 7,
+    backgroundColor: 'rgba(3, 10, 18, 0.62)',
+  },
+  enemyArrivalRoundRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  enemyArrivalDescription: {
+    color: '#BDB29F',
+    flex: 1,
+    fontFamily: 'serif',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  enemyArrivalRoundInput: {
+    width: 64,
+    minHeight: 40,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 6,
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 16,
+    textAlign: 'center',
+    backgroundColor: '#09131E',
+  },
+  enemyArrivalNoteInput: {
+    minHeight: 56,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#80683D',
+    borderRadius: 6,
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 13,
+    textAlignVertical: 'top',
+    backgroundColor: '#09131E',
+  },
   enemyPickerAddButton: {
     minHeight: 46,
     alignItems: 'center',
@@ -5101,16 +5977,16 @@ const styles = StyleSheet.create({
     color: '#F4DDAE',
     fontFamily: 'serif',
   },
-  backToCampaigns: {
-    color: '#E8B95F',
-    fontFamily: 'serif',
-    marginTop: 14,
-  },
   modalBackdrop: {
     flex: 1,
     justifyContent: 'center',
     padding: 20,
     backgroundColor: 'rgba(0, 5, 11, 0.84)',
+  },
+  combatScreenBackdrop: {
+    justifyContent: 'flex-start',
+    padding: 0,
+    backgroundColor: '#020812',
   },
   modalScrollContent: {
     flexGrow: 1,
@@ -5127,9 +6003,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#07111B',
   },
   onlineLobbyModal: {
+    position: 'relative',
     maxHeight: '84%',
+    overflow: 'hidden',
+  },
+  onlineLobbyBackground: {
+    ...StyleSheet.absoluteFill,
+  },
+  onlineLobbyBackgroundImage: {
+    borderRadius: 11,
+  },
+  onlineLobbyBackgroundShade: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(2, 8, 13, 0.76)',
   },
   combatModal: {
+    position: 'relative',
     width: '100%',
     maxWidth: 420,
     maxHeight: '82%',
@@ -5139,6 +6028,267 @@ const styles = StyleSheet.create({
     borderColor: '#C69A50',
     borderRadius: 12,
     backgroundColor: '#07111B',
+  },
+  combatFullScreen: {
+    position: 'relative',
+    flex: 1,
+    width: '100%',
+    maxWidth: 760,
+    alignSelf: 'center',
+    overflow: 'hidden',
+    backgroundColor: '#06111C',
+  },
+  combatScreenBackground: {
+    ...StyleSheet.absoluteFill,
+  },
+  combatArtLayer: {
+    ...StyleSheet.absoluteFill,
+  },
+  combatScreenBackgroundImage: {
+    width: '100%',
+    height: '100%',
+  },
+  combatScreenBackgroundShade: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(2, 9, 17, 0.72)',
+  },
+  combatDragonCorner: {
+    position: 'absolute',
+    top: -14,
+    width: 142,
+    height: 142,
+    opacity: 0.55,
+  },
+  combatDragonLeft: {
+    left: -12,
+  },
+  combatDragonRight: {
+    right: -12,
+  },
+  combatBottomFlourish: {
+    position: 'absolute',
+    bottom: -4,
+    width: 132,
+    height: 110,
+    opacity: 0.55,
+  },
+  combatBottomFlourishLeft: {
+    left: -5,
+  },
+  combatBottomFlourishRight: {
+    right: -5,
+    transform: [{ scaleX: -1 }],
+  },
+  combatHeader: {
+    minHeight: 62,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  combatHeaderCompact: {
+    minHeight: 58,
+    gap: 6,
+  },
+  combatBackButton: {
+    width: 42,
+    height: 42,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(206, 163, 87, 0.7)',
+    borderRadius: 22,
+    backgroundColor: 'rgba(4, 14, 24, 0.84)',
+  },
+  combatHeaderTitles: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+  },
+  combatScreenTitle: {
+    color: '#F2D18B',
+    fontFamily: 'serif',
+    fontSize: 27,
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+  combatEncounterName: {
+    maxWidth: '100%',
+    color: '#D4C7B4',
+    fontFamily: 'serif',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  combatLiveBadge: {
+    minWidth: 58,
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(198, 154, 80, 0.6)',
+    borderRadius: 5,
+    backgroundColor: 'rgba(4, 14, 24, 0.86)',
+  },
+  combatLiveText: {
+    color: '#F2D18B',
+    fontFamily: 'serif',
+    fontSize: 10,
+    letterSpacing: 1,
+  },
+  combatHeaderDivider: {
+    height: 1,
+    marginTop: 5,
+    backgroundColor: 'rgba(202, 157, 79, 0.62)',
+  },
+  combatRoundBar: {
+    minHeight: 43,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(198, 154, 80, 0.56)',
+    backgroundColor: 'rgba(3, 13, 22, 0.82)',
+  },
+  combatRoundDivider: {
+    width: 1,
+    height: 22,
+    backgroundColor: 'rgba(202, 157, 79, 0.62)',
+  },
+  combatRoundLive: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  combatLiveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#53D78A',
+  },
+  combatRoundLiveText: {
+    color: '#89DDA5',
+    fontFamily: 'serif',
+    fontSize: 14,
+  },
+  currentTurnCard: {
+    marginTop: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E6B759',
+    borderRadius: 8,
+    backgroundColor: 'rgba(3, 13, 22, 0.9)',
+    shadowColor: '#F0B949',
+    shadowOpacity: 0.46,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 5,
+  },
+  currentTurnHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  currentTurnEyebrow: {
+    color: '#E8BD6B',
+    fontFamily: 'serif',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+  currentTurnDivider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(206, 163, 87, 0.64)',
+  },
+  currentTurnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  currentTurnPortrait: {
+    width: 62,
+    height: 62,
+    flexShrink: 0,
+    borderWidth: 1,
+    borderColor: '#DBB461',
+    borderRadius: 6,
+  },
+  currentTurnPortraitFallback: {
+    width: 62,
+    height: 62,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#DBB461',
+    borderRadius: 6,
+    backgroundColor: '#0B1A27',
+  },
+  currentTurnPortraitInitial: {
+    color: '#E8B95F',
+    fontFamily: 'serif',
+    fontSize: 30,
+  },
+  currentTurnInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  currentTurnName: {
+    color: '#F3E3C8',
+    fontFamily: 'serif',
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  currentTurnClass: {
+    color: '#BEB5A9',
+    fontFamily: 'serif',
+    fontSize: 14,
+    marginTop: 2,
+  },
+  currentTurnInitiative: {
+    color: '#F3D28D',
+    fontFamily: 'serif',
+    fontSize: 44,
+    fontWeight: '700',
+    paddingHorizontal: 8,
+  },
+  initiativeSectionHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  initiativeSectionTitle: {
+    color: '#E8BD6B',
+    fontFamily: 'serif',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 3,
+  },
+  initiativeSectionDivider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(206, 163, 87, 0.58)',
+  },
+  combatBackgroundImage: {
+    ...StyleSheet.absoluteFill,
+    borderRadius: 11,
+    overflow: 'hidden',
+  },
+  combatBackgroundImageStyle: {
+    borderRadius: 11,
+  },
+  combatBackgroundShade: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(2, 8, 13, 0.76)',
   },
   characterActionsModal: {
     width: '100%',
@@ -5350,6 +6500,70 @@ const styles = StyleSheet.create({
   },
   onlineCharactersTitle: {
     marginTop: 14,
+  },
+  dmRollActions: {
+    gap: 6,
+    marginBottom: 8,
+  },
+  dmParticipantCard: {
+    marginBottom: 8,
+    padding: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 151, 76, 0.42)',
+    borderRadius: 6,
+    backgroundColor: 'rgba(5, 14, 22, 0.72)',
+  },
+  dmParticipantTopRow: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  dmParticipantCheckbox: {
+    width: 28,
+    height: 28,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 4,
+    backgroundColor: '#0B1924',
+  },
+  dmParticipantCheckboxSelected: {
+    borderColor: '#E8B95F',
+    backgroundColor: 'rgba(167, 122, 49, 0.4)',
+  },
+  dmParticipantCheckboxText: {
+    color: '#F4DDAE',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  dmParticipantActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+  },
+  dmManualRollInput: {
+    width: 56,
+    minHeight: 36,
+    paddingHorizontal: 5,
+    borderWidth: 1,
+    borderColor: '#79613B',
+    borderRadius: 5,
+    backgroundColor: '#0B1924',
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  dmResultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 6,
   },
   onlineCharacterRow: {
     minHeight: 54,
@@ -5598,6 +6812,25 @@ const styles = StyleSheet.create({
     fontFamily: 'serif',
     fontSize: 13,
   },
+  armorClassInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 14,
+  },
+  armorClassInput: {
+    width: 76,
+    minHeight: 40,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#8E703F',
+    borderRadius: 6,
+    color: '#F4DDAE',
+    fontSize: 16,
+    textAlign: 'center',
+    backgroundColor: '#0A1722',
+  },
   classOptions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -5693,11 +6926,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   combatRound: {
-    color: '#E8B95F',
+    color: '#F2D18B',
     fontFamily: 'serif',
-    fontSize: 18,
-    marginTop: 8,
-    textAlign: 'center',
+    fontSize: 16,
+    letterSpacing: 1,
   },
   currentTurn: {
     color: '#F4DDAE',
@@ -5707,40 +6939,55 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   initiativeList: {
-    maxHeight: 300,
-    marginTop: 14,
+    flex: 1,
+    minHeight: 0,
+  },
+  initiativeListContent: {
+    gap: 7,
+    paddingTop: 2,
+    paddingBottom: 16,
   },
   initiativeRow: {
-    minHeight: 54,
+    minHeight: 80,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(196, 151, 76, 0.35)',
+    gap: 9,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(174, 139, 84, 0.48)',
+    borderRadius: 7,
+    backgroundColor: 'rgba(3, 14, 23, 0.88)',
   },
   currentInitiativeRow: {
-    borderRadius: 5,
-    backgroundColor: 'rgba(167, 122, 49, 0.24)',
+    borderColor: '#E9BC60',
+    backgroundColor: 'rgba(49, 38, 20, 0.92)',
+    shadowColor: '#F1B844',
+    shadowOpacity: 0.38,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
   },
   initiativeRank: {
-    width: 20,
-    color: '#BDA476',
+    width: 24,
+    flexShrink: 0,
+    color: '#E8DDC8',
     fontFamily: 'serif',
-    fontSize: 15,
+    fontSize: 22,
+    textAlign: 'center',
   },
   initiativePortrait: {
-    width: 36,
-    height: 36,
+    width: 54,
+    height: 58,
     flexShrink: 0,
     borderWidth: 1,
-    borderColor: '#987443',
+    borderColor: '#B18A4E',
     borderRadius: 6,
     backgroundColor: '#0B1721',
   },
   initiativePortraitFallback: {
-    width: 36,
-    height: 36,
+    width: 54,
+    height: 58,
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
@@ -5752,60 +6999,82 @@ const styles = StyleSheet.create({
   initiativePortraitInitial: {
     color: '#E8B95F',
     fontFamily: 'serif',
-    fontSize: 17,
+    fontSize: 24,
   },
   initiativeCombatantInfo: {
     flex: 1,
     minWidth: 0,
   },
   combatHpControls: {
+    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 5,
+    marginTop: 4,
   },
   combatHpButton: {
-    width: 24,
+    width: 30,
     height: 30,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#8F713D',
-    borderRadius: 5,
-    backgroundColor: 'rgba(167, 122, 49, 0.14)',
-  },
-  combatHpButtonText: {
-    color: '#E8B95F',
-    fontSize: 15,
-    fontWeight: '700',
+    borderRadius: 15,
+    backgroundColor: 'rgba(167, 122, 49, 0.18)',
   },
   combatHpValue: {
-    minWidth: 44,
-    color: '#F4DDAE',
+    minWidth: 64,
+    color: '#CFC1A9',
     fontFamily: 'serif',
-    fontSize: 11,
+    fontSize: 12,
     textAlign: 'center',
   },
   initiativeName: {
-    color: '#F4DDAE',
+    color: '#F1E4D2',
     fontFamily: 'serif',
-    fontSize: 16,
+    fontSize: 17,
+    fontWeight: '600',
   },
   initiativeClass: {
-    color: '#BDA476',
+    color: '#BDB4A8',
     fontFamily: 'serif',
-    fontSize: 11,
+    fontSize: 12,
     marginTop: 1,
   },
-  initiativeCalculation: {
-    color: '#BFE0C4',
+  initiativeCurrentLabel: {
+    color: '#EBC46D',
     fontFamily: 'serif',
-    fontSize: 10,
+    fontSize: 12,
     marginTop: 2,
   },
-  initiativeScore: {
-    color: '#E8B95F',
+  initiativeCalculation: {
+    color: '#C5B9A8',
     fontFamily: 'serif',
-    fontSize: 15,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  initiativeScoreBox: {
+    minWidth: 40,
+    minHeight: 46,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+    borderLeftWidth: 1,
+    borderLeftColor: 'rgba(202, 157, 79, 0.32)',
+  },
+  initiativeScore: {
+    color: '#F1D18D',
+    fontFamily: 'serif',
+    fontSize: 25,
+    fontWeight: '600',
+  },
+  combatCharacterMenuButton: {
+    width: 32,
+    height: 40,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   addCombatAllyButton: {
     minHeight: 40,
@@ -5835,14 +7104,47 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
-    marginTop: 18,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(202, 157, 79, 0.45)',
   },
   endCombatButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 10,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(185, 103, 89, 0.65)',
+    borderRadius: 7,
+    backgroundColor: 'rgba(28, 15, 18, 0.86)',
   },
   endCombatText: {
     color: '#F0A59B',
+    fontFamily: 'serif',
     fontSize: 14,
+  },
+  combatNextTurnButton: {
+    minHeight: 48,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
+    borderWidth: 1,
+    borderColor: '#F5D486',
+    borderRadius: 7,
+    backgroundColor: '#D8A64D',
+    shadowColor: '#E6B859',
+    shadowOpacity: 0.34,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 3,
+  },
+  combatNextTurnText: {
+    color: '#17120A',
+    fontFamily: 'serif',
+    fontSize: 16,
+    fontWeight: '700',
   },
 });

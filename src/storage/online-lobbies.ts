@@ -3,7 +3,11 @@ import {
   getSupabaseClient,
   type SupabaseIdentity,
 } from '@/lib/supabase';
-import type { CampaignCharacter, CampaignEncounter } from '@/storage/campaigns';
+import type {
+  CampaignCharacter,
+  CampaignEncounter,
+  CampaignEncounterBackgroundId,
+} from '@/storage/campaigns';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export type OnlineLobbyMember = {
@@ -20,6 +24,7 @@ export type OnlineLobbyCharacter = {
   race: string | null;
   portrait_preset_id: string | null;
   initiative_bonus: number;
+  armor_class: number;
 };
 
 export type OnlineInitiativeResult = {
@@ -49,6 +54,8 @@ export type OnlineDmParticipant = {
   defeated_count: number;
   inactive_count: number;
   arrival_round: number;
+  arrival_mode?: 'round' | 'dm';
+  arrival_note?: string | null;
   image_id: string | null;
   sort_order: number;
   members: {
@@ -64,19 +71,45 @@ export type OnlineDmParticipant = {
   }[];
 };
 
+export type OnlineVisibleCombatant = {
+  initiative_key: string;
+  participant_type: 'enemy' | 'ally';
+  name: string;
+  total: number | null;
+  armor_class?: number;
+  current_hp?: number;
+  max_hp?: number;
+  image_id: string | null;
+  portrait_preset_id: string | null;
+  sort_order: number;
+  visible_member_count: number;
+};
+
+type OnlineDmEnemyData = {
+  id: string;
+  arrivalMode: 'round' | 'dm';
+  arrivalRound: number;
+  arrivalNote: string | null;
+};
+
 export type OnlineLobbySnapshot = {
   lobby_id: string;
   owner_id: string;
+  encounter_id: string;
   encounter_name: string;
   status: 'open' | 'closed';
   combat_started: boolean;
   current_round: number;
+  visibility_revision: number;
+  initiative_schema_version: number;
+  background_id: CampaignEncounterBackgroundId | null;
   role: 'dm' | 'player';
   members: OnlineLobbyMember[];
   characters: OnlineLobbyCharacter[];
   initiative_results: OnlineInitiativeResult[];
+  visible_combatants: OnlineVisibleCombatant[];
   join_code?: string;
-  enemy_data?: unknown[];
+  enemy_data?: OnlineDmEnemyData[];
   dm_participants?: OnlineDmParticipant[];
 };
 
@@ -91,13 +124,45 @@ function parseSnapshot(value: unknown): OnlineLobbySnapshot {
     throw new Error('Supabase returned an invalid lobby snapshot.');
   }
   const snapshot = value as Partial<OnlineLobbySnapshot>;
+  const visibleCombatants = snapshot.visible_combatants ?? [];
+  if (
+    typeof snapshot.visibility_revision !== 'number' ||
+    typeof snapshot.initiative_schema_version !== 'number'
+  ) {
+    throw new Error(
+      'Shared initiative is not enabled on this Supabase project. Run supabase/migrations/20261016010000_shared_initiative.sql in the Supabase SQL Editor.',
+    );
+  }
+  if (snapshot.background_id === undefined) {
+    throw new Error(
+      'Shared combat backgrounds are not enabled on this Supabase project. Run supabase/migrations/20261016020000_start_shared_combat.sql in the Supabase SQL Editor.',
+    );
+  }
+  if (
+    snapshot.background_id !== null &&
+    snapshot.background_id !== 'haunted-city' &&
+    snapshot.background_id !== 'moonlit-forest' &&
+    snapshot.background_id !== 'frozen-fortress' &&
+    snapshot.background_id !== 'desert-ruins' &&
+    snapshot.background_id !== 'rose-castle' &&
+    snapshot.background_id !== 'sunlit-harbor'
+  ) {
+    throw new Error('Supabase returned an unsupported combat background.');
+  }
   if (
     typeof snapshot.lobby_id !== 'string' ||
     typeof snapshot.owner_id !== 'string' ||
+    typeof snapshot.encounter_id !== 'string' ||
     typeof snapshot.encounter_name !== 'string' ||
     (snapshot.status !== 'open' && snapshot.status !== 'closed') ||
     typeof snapshot.combat_started !== 'boolean' ||
     typeof snapshot.current_round !== 'number' ||
+    typeof snapshot.visibility_revision !== 'number' ||
+    !Number.isInteger(snapshot.visibility_revision) ||
+    snapshot.visibility_revision < 0 ||
+    typeof snapshot.initiative_schema_version !== 'number' ||
+    !Number.isInteger(snapshot.initiative_schema_version) ||
+    snapshot.initiative_schema_version < 0 ||
     (snapshot.role !== 'dm' && snapshot.role !== 'player') ||
     !Array.isArray(snapshot.members) ||
     !Array.isArray(snapshot.characters) ||
@@ -125,7 +190,10 @@ function parseSnapshot(value: unknown): OnlineLobbySnapshot {
       (character.race === null || typeof character.race === 'string') &&
       (character.portrait_preset_id === null ||
         typeof character.portrait_preset_id === 'string') &&
-      Number.isInteger(character.initiative_bonus),
+      Number.isInteger(character.initiative_bonus) &&
+      Number.isInteger(character.armor_class) &&
+      character.armor_class >= 1 &&
+      character.armor_class <= 40,
   );
   const resultsAreValid = snapshot.initiative_results.every(
     (result) =>
@@ -165,13 +233,49 @@ function parseSnapshot(value: unknown): OnlineLobbySnapshot {
           Number.isInteger(participant.member_count) &&
           Array.isArray(participant.members),
       ));
-  if (!membersAreValid || !charactersAreValid || !resultsAreValid || !dmParticipantsAreValid) {
+  const visibleCombatantsAreValid =
+    Array.isArray(visibleCombatants) &&
+    visibleCombatants.every(
+      (participant) =>
+        typeof participant === 'object' &&
+        participant !== null &&
+        typeof participant.initiative_key === 'string' &&
+        (participant.participant_type === 'enemy' ||
+          participant.participant_type === 'ally') &&
+        typeof participant.name === 'string' &&
+        (participant.total === null || Number.isInteger(participant.total)) &&
+        (participant.armor_class === undefined ||
+          (Number.isInteger(participant.armor_class) &&
+            participant.armor_class >= 1 &&
+            participant.armor_class <= 40)) &&
+        (participant.current_hp === undefined ||
+          (Number.isInteger(participant.current_hp) && participant.current_hp >= 0)) &&
+        (participant.max_hp === undefined ||
+          (Number.isInteger(participant.max_hp) && participant.max_hp >= 1)) &&
+        (participant.current_hp === undefined ||
+          participant.max_hp === undefined ||
+          participant.current_hp <= participant.max_hp) &&
+        (participant.image_id === null || typeof participant.image_id === 'string') &&
+        (participant.portrait_preset_id === null ||
+          typeof participant.portrait_preset_id === 'string') &&
+        Number.isInteger(participant.sort_order) &&
+        Number.isInteger(participant.visible_member_count) &&
+        participant.visible_member_count >= 1,
+    );
+  if (
+    !membersAreValid ||
+    !charactersAreValid ||
+    !resultsAreValid ||
+    !dmParticipantsAreValid ||
+    !visibleCombatantsAreValid
+  ) {
     throw new Error('Supabase returned an invalid initiative roster.');
   }
   if (snapshot.role === 'player' && (
     'enemy_data' in snapshot ||
     'join_code' in snapshot ||
     'dm_participants' in snapshot ||
+    (!snapshot.combat_started && visibleCombatants.length > 0) ||
     (!snapshot.combat_started &&
       snapshot.initiative_results.some((result) => result.participant_type !== 'character'))
   )) {
@@ -185,7 +289,39 @@ function parseSnapshot(value: unknown): OnlineLobbySnapshot {
   ) {
     throw new Error('Supabase returned an incomplete DM lobby snapshot.');
   }
-  return snapshot as OnlineLobbySnapshot;
+  const enemyDataById = new Map<string, OnlineDmEnemyData>();
+  if (snapshot.role === 'dm') {
+    for (const value of snapshot.enemy_data ?? []) {
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        typeof value.id === 'string' &&
+        (value.arrivalMode === 'round' || value.arrivalMode === 'dm')
+      ) {
+        enemyDataById.set(value.id, {
+          id: value.id,
+          arrivalMode: value.arrivalMode,
+          arrivalRound:
+            typeof value.arrivalRound === 'number' ? value.arrivalRound : 1,
+          arrivalNote: typeof value.arrivalNote === 'string' ? value.arrivalNote : null,
+        });
+      }
+    }
+  }
+  const dmParticipants = snapshot.dm_participants?.map((participant) => {
+    const enemyId = participant.initiative_key.match(/^enemy:([^:]+):/)?.[1];
+    const schedule = enemyId ? enemyDataById.get(enemyId) : undefined;
+    return {
+      ...participant,
+      arrival_mode: schedule?.arrivalMode ?? 'round',
+      arrival_note: schedule?.arrivalNote ?? null,
+    };
+  });
+  return {
+    ...snapshot,
+    visible_combatants: visibleCombatants,
+    ...(dmParticipants ? { dm_participants: dmParticipants } : {}),
+  } as OnlineLobbySnapshot;
 }
 
 export async function createOnlineCombatLobby(
@@ -194,6 +330,7 @@ export async function createOnlineCombatLobby(
   encounter: CampaignEncounter,
   characters: CampaignCharacter[],
   allies: NonNullable<CampaignEncounter['allies']> = [],
+  backgroundId: CampaignEncounterBackgroundId | null = null,
 ): Promise<OnlineLobbySnapshot> {
   requireIdentity(identity);
   const supabase = getSupabaseClient();
@@ -206,18 +343,26 @@ export async function createOnlineCombatLobby(
       race: character.race ?? '',
       portraitPresetId: character.portraitPresetId ?? '',
       initiativeBonus: character.initiative,
+      armorClass: character.armorClass ?? 10,
     }));
   const enemyData = encounter.enemies.map((enemy) => ({
     id: enemy.id,
     name: enemy.name,
     initiative: enemy.initiative,
+    armorClass: enemy.armorClass ?? 10,
     imageId: enemy.imageId ?? '',
     quantity: enemy.quantity ?? 1,
     initiativeMode: enemy.initiativeMode ?? 'individual',
     maxHp: enemy.maxHp ?? 10,
     isHidden: enemy.isHidden ?? false,
-    arrivalRound: enemy.arrivalRound ?? 1,
-    status: enemy.status ?? 'waiting',
+    arrivalMode: enemy.arrivalMode ?? 'round',
+    arrivalNote: enemy.arrivalNote ?? '',
+    arrivalRound: enemy.arrivalMode === 'dm' ? 1 : enemy.arrivalRound ?? 1,
+    status:
+      enemy.arrivalMode === 'dm' ||
+      (enemy.arrivalRound ?? 1) > 1
+        ? 'scheduled'
+        : 'waiting',
     isActive: false,
     conditions: [],
   }));
@@ -225,10 +370,11 @@ export async function createOnlineCombatLobby(
     id: ally.id,
     name: ally.name,
     initiative: ally.initiative,
+    armorClass: ally.armorClass ?? 10,
     portraitPresetId: ally.portraitPresetId ?? '',
     maxHp: ally.maxHp ?? 10,
   }));
-  const { data, error } = await supabase.rpc('create_combat_lobby_with_initiative', {
+  const { data, error } = await supabase.rpc('create_combat_lobby_with_reinforcements', {
     p_campaign_id: campaignId,
     p_encounter_id: encounter.id,
     p_encounter_name: encounter.name,
@@ -236,7 +382,16 @@ export async function createOnlineCombatLobby(
     p_enemy_data: enemyData,
     p_allies: allyData,
   });
-  if (error) throw new Error(`Online lobby could not be created: ${error.message}`);
+  if (error) {
+    const migrationMissing =
+      error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(error.message);
+    throw new Error(
+      migrationMissing
+        ? 'Online reinforcement scheduling is not enabled on this Supabase project. Run supabase/migrations/20261016140000_combat_reinforcements.sql in the Supabase SQL Editor.'
+        : `Online lobby could not be created: ${error.message}`,
+    );
+  }
   const created = data as { lobby_id?: unknown; join_code?: unknown } | null;
   if (
     !created ||
@@ -246,6 +401,20 @@ export async function createOnlineCombatLobby(
     throw new Error('Supabase created the lobby but returned an invalid response.');
   }
 
+  const { error: backgroundError } = await supabase.rpc('set_combat_lobby_background', {
+    p_lobby_id: created.lobby_id,
+    p_background_id: backgroundId,
+  });
+  if (backgroundError) {
+    const migrationMissing =
+      backgroundError.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(backgroundError.message);
+    throw new Error(
+      migrationMissing
+        ? 'Combat backgrounds are not enabled on this Supabase project. Run supabase/migrations/20261016020000_start_shared_combat.sql in the Supabase SQL Editor.'
+        : `Combat background could not be saved: ${backgroundError.message}`,
+    );
+  }
   const snapshot = await loadOnlineLobbySnapshot(identity, created.lobby_id);
   await rememberOnlineLobby(identity, created.lobby_id);
   return snapshot;
@@ -277,6 +446,31 @@ export async function restoreLastOnlineLobby(
   }
 }
 
+export async function leaveOnlineCombatLobby(
+  identity: SupabaseIdentity,
+  lobbyId: string,
+): Promise<void> {
+  requireIdentity(identity);
+  const { error } = await getSupabaseClient().rpc('leave_combat_lobby', {
+    p_lobby_id: lobbyId,
+  });
+  if (error) {
+    const migrationMissing =
+      error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(error.message);
+    throw new Error(
+      migrationMissing
+        ? 'Leaving a shared lobby is not enabled on this Supabase project. Run supabase/migrations/20261016040000_player_leave_lobby.sql in the Supabase SQL Editor.'
+        : `Lobby could not be left: ${error.message}`,
+    );
+  }
+
+  const lastLobbyKey = `${LAST_LOBBY_KEY_PREFIX}${identity.userId}`;
+  if ((await AsyncStorage.getItem(lastLobbyKey)) === lobbyId) {
+    await AsyncStorage.removeItem(lastLobbyKey);
+  }
+}
+
 export async function submitPlayerInitiative(
   identity: SupabaseIdentity,
   lobbyId: string,
@@ -290,7 +484,54 @@ export async function submitPlayerInitiative(
     p_lobby_id: lobbyId,
     p_raw_roll: rawRoll,
   });
-  if (error) throw new Error(`Initiative could not be submitted: ${error.message}`);
+  if (error) {
+    const migrationMissing =
+      error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(error.message);
+    const initiativeAliasMigrationMissing =
+      /missing from-clause entry for table "m"/i.test(error.message);
+    throw new Error(
+      migrationMissing
+        ? 'Party initiative is not enabled on this Supabase project. Run supabase/migrations/20261016010000_shared_initiative.sql in the Supabase SQL Editor, then reopen the lobby.'
+        : initiativeAliasMigrationMissing
+          ? 'Player initiative needs a database fix. Run supabase/migrations/20261016050000_fix_player_initiative_member_alias.sql in the Supabase SQL Editor, then try again.'
+        : `Initiative could not be submitted: ${error.message}`,
+    );
+  }
+}
+
+export async function rollPlayerInitiative(
+  identity: SupabaseIdentity,
+  lobbyId: string,
+): Promise<void> {
+  await submitPlayerInitiative(identity, lobbyId, null);
+}
+
+export async function submitDmPartyInitiative(
+  identity: SupabaseIdentity,
+  lobbyId: string,
+  characterId: string,
+  rawRoll: number,
+): Promise<void> {
+  requireIdentity(identity);
+  if (!Number.isInteger(rawRoll) || rawRoll < 1 || rawRoll > 20) {
+    throw new Error('A d20 result must be a whole number from 1 through 20.');
+  }
+  const { error } = await getSupabaseClient().rpc('submit_dm_party_combat_initiative', {
+    p_lobby_id: lobbyId,
+    p_character_id: characterId,
+    p_raw_roll: rawRoll,
+  });
+  if (error) {
+    const migrationMissing =
+      error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(error.message);
+    throw new Error(
+      migrationMissing
+        ? 'DM party initiative entry needs a database update. Run supabase/migrations/20261016123000_dm_party_manual_initiative.sql in the Supabase SQL Editor, then reopen the lobby.'
+        : `Party initiative could not be saved: ${error.message}`,
+    );
+  }
 }
 
 export async function submitDmInitiative(
@@ -328,10 +569,76 @@ export async function resetDmInitiative(
   if (error) throw new Error(`Initiative could not be reset: ${error.message}`);
 }
 
+export async function startOnlineCombat(
+  identity: SupabaseIdentity,
+  lobbyId: string,
+): Promise<void> {
+  requireIdentity(identity);
+  const { error } = await getSupabaseClient().rpc('start_combat_lobby', {
+    p_lobby_id: lobbyId,
+  });
+  if (error) {
+    const migrationMissing =
+      error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(error.message);
+    throw new Error(
+      migrationMissing
+        ? 'Shared combat start is not enabled on this Supabase project. Run supabase/migrations/20261016020000_start_shared_combat.sql and supabase/migrations/20261016130000_fix_dm_party_roll_combat_start.sql in the Supabase SQL Editor.'
+        : `Combat could not be started: ${error.message}`,
+    );
+  }
+}
+
+export async function activateOnlineCombatReinforcement(
+  identity: SupabaseIdentity,
+  lobbyId: string,
+  initiativeKey: string,
+): Promise<void> {
+  requireIdentity(identity);
+  const { error } = await getSupabaseClient().rpc(
+    'activate_combat_lobby_reinforcement',
+    {
+      p_lobby_id: lobbyId,
+      p_initiative_key: initiativeKey,
+    },
+  );
+  if (error) {
+    const migrationMissing =
+      error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(error.message);
+    throw new Error(
+      migrationMissing
+        ? 'Reinforcement activation is not enabled on this Supabase project. Run supabase/migrations/20261016140000_combat_reinforcements.sql in the Supabase SQL Editor.'
+        : `Reinforcement could not be activated: ${error.message}`,
+    );
+  }
+}
+
+export async function advanceOnlineCombatRound(
+  identity: SupabaseIdentity,
+  lobbyId: string,
+): Promise<void> {
+  requireIdentity(identity);
+  const { error } = await getSupabaseClient().rpc('advance_combat_lobby_round', {
+    p_lobby_id: lobbyId,
+  });
+  if (error) {
+    const migrationMissing =
+      error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(error.message);
+    throw new Error(
+      migrationMissing
+        ? 'Combat round advancement is not enabled on this Supabase project. Run supabase/migrations/20261016140000_combat_reinforcements.sql in the Supabase SQL Editor.'
+        : `Combat round could not be advanced: ${error.message}`,
+    );
+  }
+}
+
 export async function joinOnlineCombatLobby(
   identity: SupabaseIdentity,
   joinCode: string,
   displayName: string,
+  options: { remember?: boolean } = {},
 ): Promise<OnlineLobbySnapshot> {
   requireIdentity(identity);
   const normalizedCode = joinCode.trim().replace(/\s/g, '').toUpperCase();
@@ -349,7 +656,7 @@ export async function joinOnlineCombatLobby(
     throw new Error('Supabase joined the lobby but returned an invalid response.');
   }
   const snapshot = await loadOnlineLobbySnapshot(identity, data);
-  await rememberOnlineLobby(identity, data);
+  if (options.remember !== false) await rememberOnlineLobby(identity, data);
   return snapshot;
 }
 
@@ -362,7 +669,28 @@ export async function loadOnlineLobbySnapshot(
     p_lobby_id: lobbyId,
   });
   if (error) throw new Error(`Lobby could not be loaded: ${error.message}`);
-  return parseSnapshot(data);
+  const snapshot = parseSnapshot(data);
+  if (!snapshot.combat_started) {
+    return { ...snapshot, visible_combatants: [] };
+  }
+  const { data: visibleData, error: visibleError } = await getSupabaseClient().rpc(
+    'get_visible_combat_lobby_participants',
+    { p_lobby_id: lobbyId },
+  );
+  if (visibleError) {
+    const migrationMissing =
+      visibleError.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(visibleError.message);
+    throw new Error(
+      migrationMissing
+        ? 'Shared combat visibility is not enabled on this Supabase project. Run supabase/migrations/20261016020000_start_shared_combat.sql in the Supabase SQL Editor.'
+        : `Visible combat participants could not be loaded: ${visibleError.message}`,
+    );
+  }
+  if (!Array.isArray(visibleData)) {
+    throw new Error('Supabase returned an invalid visible combatant list.');
+  }
+  return parseSnapshot({ ...snapshot, visible_combatants: visibleData });
 }
 
 export async function claimOnlineLobbyCharacter(
@@ -403,16 +731,6 @@ export function subscribeToOnlineCombatLobby(
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'combat_lobbies', filter: `id=eq.${lobbyId}` },
-      onChange,
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'combat_lobby_initiative_results',
-        filter: `lobby_id=eq.${lobbyId}`,
-      },
       onChange,
     )
     .on(

@@ -29,6 +29,7 @@ export type CampaignCharacter = {
   className: string;
   race?: string;
   initiative: number;
+  armorClass?: number;
   portraitUri?: string | null;
   portraitPresetId?: string;
   status?: 'active' | 'stored' | 'dead';
@@ -58,6 +59,7 @@ export type CampaignCombatCharacter = {
   initiativeRoll: number;
   initiativeBonus: number;
   initiativeTotal: number;
+  armorClass?: number;
 };
 
 export type CampaignCombatAlly = {
@@ -66,6 +68,7 @@ export type CampaignCombatAlly = {
   className: string;
   race?: string;
   initiative: number;
+  armorClass?: number;
   portraitUri?: string | null;
   portraitPresetId?: string;
   maxHp?: number;
@@ -79,11 +82,15 @@ export type CampaignCombatEnemy = {
   id: string;
   name: string;
   initiative: number;
+  armorClass?: number;
   imageId?: string;
   quantity?: number;
   initiativeMode?: 'individual' | 'horde';
   isHidden?: boolean;
+  isActive?: boolean;
+  arrivalMode?: 'round' | 'dm';
   arrivalRound?: number;
+  arrivalNote?: string;
   status?: 'waiting' | 'active' | 'scheduled' | 'defeated' | 'inactive';
   maxHp?: number;
   currentHp?: number;
@@ -124,12 +131,16 @@ export function getCampaignInitiativeKey(
 export type CampaignEncounterEnemyInput = {
   name: string;
   initiative: number;
+  armorClass?: number;
   imageId: string;
   imageUri?: string;
   quantity: number;
   initiativeMode: 'individual' | 'horde';
   isHidden?: boolean;
+  isActive?: boolean;
+  arrivalMode?: 'round' | 'dm';
   arrivalRound?: number;
+  arrivalNote?: string;
   status?: 'waiting' | 'active' | 'scheduled' | 'defeated' | 'inactive';
   maxHp: number;
 };
@@ -137,11 +148,20 @@ export type CampaignEncounterEnemyInput = {
 export type CampaignEncounter = {
   id: string;
   name: string;
+  backgroundId?: CampaignEncounterBackgroundId;
   enemies: CampaignCombatEnemy[];
   allies?: CampaignCombatAlly[];
   initiativeResults?: Record<string, CampaignInitiativeResult>;
   status: 'draft' | 'ready' | 'in-progress';
 };
+
+export type CampaignEncounterBackgroundId =
+  | 'haunted-city'
+  | 'moonlit-forest'
+  | 'frozen-fortress'
+  | 'desert-ruins'
+  | 'rose-castle'
+  | 'sunlit-harbor';
 
 export type CampaignCombatHistory = {
   startedAt: string;
@@ -210,6 +230,11 @@ function isCampaignCharacter(value: unknown): value is CampaignCharacter {
     (character.race === undefined || typeof character.race === 'string') &&
     typeof character.initiative === 'number' &&
     Number.isFinite(character.initiative) &&
+    (character.armorClass === undefined ||
+      (typeof character.armorClass === 'number' &&
+        Number.isInteger(character.armorClass) &&
+        character.armorClass >= 1 &&
+        character.armorClass <= 40)) &&
     (character.portraitUri === undefined ||
       character.portraitUri === null ||
       typeof character.portraitUri === 'string') &&
@@ -228,6 +253,13 @@ function isCampaignEncounter(value: unknown): value is CampaignEncounter {
   return (
     typeof encounter.id === 'string' &&
     typeof encounter.name === 'string' &&
+    (encounter.backgroundId === undefined ||
+      encounter.backgroundId === 'haunted-city' ||
+      encounter.backgroundId === 'moonlit-forest' ||
+      encounter.backgroundId === 'frozen-fortress' ||
+      encounter.backgroundId === 'desert-ruins' ||
+      encounter.backgroundId === 'rose-castle' ||
+      encounter.backgroundId === 'sunlit-harbor') &&
     Array.isArray(encounter.enemies) &&
     encounter.enemies.every(isCampaignCombatEnemy) &&
     (encounter.allies === undefined ||
@@ -266,6 +298,11 @@ function isCampaignCombatEnemy(value: unknown): value is CampaignCombatEnemy {
     typeof enemy.name === 'string' &&
     typeof enemy.initiative === 'number' &&
     Number.isFinite(enemy.initiative) &&
+    (enemy.armorClass === undefined ||
+      (typeof enemy.armorClass === 'number' &&
+        Number.isInteger(enemy.armorClass) &&
+        enemy.armorClass >= 1 &&
+        enemy.armorClass <= 40)) &&
     (enemy.imageId === undefined || typeof enemy.imageId === 'string') &&
     (enemy.quantity === undefined ||
       (typeof enemy.quantity === 'number' &&
@@ -276,10 +313,17 @@ function isCampaignCombatEnemy(value: unknown): value is CampaignCombatEnemy {
       enemy.initiativeMode === 'individual' ||
       enemy.initiativeMode === 'horde') &&
     (enemy.isHidden === undefined || typeof enemy.isHidden === 'boolean') &&
+    (enemy.isActive === undefined || typeof enemy.isActive === 'boolean') &&
+    (enemy.arrivalMode === undefined ||
+      enemy.arrivalMode === 'round' ||
+      enemy.arrivalMode === 'dm') &&
+    (enemy.arrivalNote === undefined ||
+      (typeof enemy.arrivalNote === 'string' && enemy.arrivalNote.length <= 200)) &&
     (enemy.arrivalRound === undefined ||
       (typeof enemy.arrivalRound === 'number' &&
         Number.isInteger(enemy.arrivalRound) &&
-        enemy.arrivalRound >= 1)) &&
+        enemy.arrivalRound >= 1 &&
+        enemy.arrivalRound <= 999)) &&
     (enemy.status === undefined ||
       enemy.status === 'waiting' ||
       enemy.status === 'active' ||
@@ -350,6 +394,11 @@ function isCampaignCombatCharacter(value: unknown): value is CampaignCombatChara
     Number.isInteger(character.initiativeBonus) &&
     typeof character.initiativeTotal === 'number' &&
     Number.isInteger(character.initiativeTotal) &&
+    (character.armorClass === undefined ||
+      (typeof character.armorClass === 'number' &&
+        Number.isInteger(character.armorClass) &&
+        character.armorClass >= 1 &&
+        character.armorClass <= 40)) &&
     character.initiativeRoll === character.initiativeTotal - character.initiativeBonus &&
     character.initiative === character.initiativeTotal
   );
@@ -368,6 +417,11 @@ function isCampaignCombatAlly(value: unknown): value is CampaignCombatAlly {
     (ally.race === undefined || typeof ally.race === 'string') &&
     typeof ally.initiative === 'number' &&
     Number.isInteger(ally.initiative) &&
+    (ally.armorClass === undefined ||
+      (typeof ally.armorClass === 'number' &&
+        Number.isInteger(ally.armorClass) &&
+        ally.armorClass >= 1 &&
+        ally.armorClass <= 40)) &&
     (ally.initiativeTotal === undefined
       ? ally.initiative >= -4 && ally.initiative <= 10
       : ally.initiative === ally.initiativeTotal &&
@@ -605,6 +659,14 @@ export async function addCampaignCharacter(
   if (!Number.isFinite(details.initiative)) {
     throw new Error('Initiative must be a valid number.');
   }
+  if (
+    details.armorClass !== undefined &&
+    (!Number.isInteger(details.armorClass) ||
+      details.armorClass < 1 ||
+      details.armorClass > 40)
+  ) {
+    throw new Error('AC must be a whole number from 1 to 40.');
+  }
 
   const campaigns = await loadCampaigns();
   const campaign = campaigns.find((item) => item.id === campaignId);
@@ -652,6 +714,7 @@ export async function saveCampaignEncounter(
   enemyInputs: CampaignEncounterEnemyInput[],
   status: 'draft' | 'ready',
   allyInputs: CampaignCombatAlly[] = [],
+  backgroundId?: CampaignEncounterBackgroundId,
 ): Promise<Campaign> {
   const trimmedName = name.trim();
   const enemies = enemyInputs
@@ -667,6 +730,10 @@ export async function saveCampaignEncounter(
         !Number.isInteger(enemy.initiative) ||
         enemy.initiative < -20 ||
         enemy.initiative > 30 ||
+        (enemy.armorClass !== undefined &&
+          (!Number.isInteger(enemy.armorClass) ||
+            enemy.armorClass < 1 ||
+            enemy.armorClass > 40)) ||
         (enemy.initiativeMode !== 'individual' && enemy.initiativeMode !== 'horde') ||
         !Number.isInteger(enemy.maxHp) ||
         enemy.maxHp < 1 ||
@@ -674,7 +741,23 @@ export async function saveCampaignEncounter(
         !enemy.imageId,
     )
   ) {
-    throw new Error('Check each enemy’s image, quantity, initiative bonus, and HP.');
+    throw new Error('Check each enemy’s image, quantity, initiative bonus, AC, and HP.');
+  }
+  if (
+    enemies.some(
+      (enemy) =>
+        (enemy.arrivalMode !== undefined &&
+          enemy.arrivalMode !== 'round' &&
+          enemy.arrivalMode !== 'dm') ||
+        (enemy.arrivalMode !== 'dm' &&
+          (enemy.arrivalRound !== undefined &&
+            (!Number.isInteger(enemy.arrivalRound) ||
+              enemy.arrivalRound < 1 ||
+              enemy.arrivalRound > 999))) ||
+        (enemy.arrivalNote !== undefined && enemy.arrivalNote.length > 200),
+    )
+  ) {
+    throw new Error('Check each enemy’s reinforcement arrival mode, round, and trigger note.');
   }
   if (
     allyInputs.some(
@@ -685,12 +768,16 @@ export async function saveCampaignEncounter(
         !Number.isInteger(ally.initiative) ||
         ally.initiative < -4 ||
         ally.initiative > 10 ||
+        (ally.armorClass !== undefined &&
+          (!Number.isInteger(ally.armorClass) ||
+            ally.armorClass < 1 ||
+            ally.armorClass > 40)) ||
         !Number.isInteger(ally.maxHp) ||
         (ally.maxHp ?? 0) < 1 ||
         (ally.maxHp ?? 0) > 9999,
     )
   ) {
-    throw new Error('Check each ally’s name, class, initiative modifier, and HP.');
+    throw new Error('Check each ally’s name, class, initiative modifier, AC, and HP.');
   }
 
   const campaigns = await loadCampaigns();
@@ -714,15 +801,33 @@ export async function saveCampaignEncounter(
   }
 
   const id = existing?.id ?? createId();
-  const savedEnemies = enemies.map((enemy, index) => ({
-    id: existing?.enemies[index]?.id ?? createId(),
-    name: enemy.name,
-    initiative: enemy.initiative,
-    imageId: enemy.imageId,
-    quantity: enemy.quantity,
-    initiativeMode: enemy.initiativeMode,
-    maxHp: enemy.maxHp,
-  }));
+  const savedEnemies = enemies.map((enemy, index) => {
+    const existingEnemy = existing?.enemies[index];
+    const arrivalMode = enemy.arrivalMode ??
+      existingEnemy?.arrivalMode ??
+      (existingEnemy?.status === 'scheduled' && (existingEnemy.arrivalRound ?? 1) === 1
+        ? 'dm'
+        : 'round');
+    const arrivalRound = arrivalMode === 'dm'
+      ? 1
+      : enemy.arrivalRound ?? existingEnemy?.arrivalRound ?? 1;
+    return {
+      id: existingEnemy?.id ?? createId(),
+      name: enemy.name,
+      initiative: enemy.initiative,
+      armorClass: enemy.armorClass ?? 10,
+      imageId: enemy.imageId,
+      quantity: enemy.quantity,
+      initiativeMode: enemy.initiativeMode,
+      isHidden: enemy.isHidden ?? existingEnemy?.isHidden ?? false,
+      isActive: enemy.isActive ?? existingEnemy?.isActive ?? false,
+      arrivalMode,
+      arrivalRound,
+      arrivalNote: enemy.arrivalNote?.trim().slice(0, 200) || undefined,
+      status: arrivalMode === 'dm' || arrivalRound > 1 ? 'scheduled' as const : 'waiting' as const,
+      maxHp: enemy.maxHp,
+    };
+  });
   const existingAllies = existing?.allies ?? [];
   const newlyPersistedPortraits: string[] = [];
   const savedAllies = await Promise.all(
@@ -779,6 +884,7 @@ export async function saveCampaignEncounter(
   const updatedEncounter: CampaignEncounter = {
     id,
     name: trimmedName,
+    ...(backgroundId ? { backgroundId } : {}),
     enemies: savedEnemies,
     allies: savedAllies,
     initiativeResults,
@@ -1039,6 +1145,44 @@ export async function updateCampaignCharacterInitiative(
   return updatedCampaign;
 }
 
+export async function updateCampaignCharacterArmorClass(
+  campaignId: string,
+  characterId: string,
+  armorClass: number,
+): Promise<Campaign> {
+  if (!Number.isInteger(armorClass) || armorClass < 1 || armorClass > 40) {
+    throw new Error('AC must be a whole number from 1 to 40.');
+  }
+  const campaigns = await loadCampaigns();
+  const campaign = campaigns.find((item) => item.id === campaignId);
+  if (!campaign) throw new Error('That campaign could not be found.');
+  if (!(campaign.characters ?? []).some((character) => character.id === characterId)) {
+    throw new Error('That character could not be found.');
+  }
+
+  const updatedCharacters = (campaign.characters ?? []).map((character) =>
+    character.id === characterId ? { ...character, armorClass } : character,
+  );
+  const updatedCampaign: Campaign = {
+    ...campaign,
+    characters: updatedCharacters,
+    ...(campaign.combat?.characters
+      ? {
+          combat: {
+            ...campaign.combat,
+            characters: campaign.combat.characters.map((character) =>
+              character.id === characterId ? { ...character, armorClass } : character,
+            ),
+          },
+        }
+      : {}),
+  };
+  await saveCampaigns(
+    campaigns.map((item) => (item.id === campaignId ? updatedCampaign : item)),
+  );
+  return updatedCampaign;
+}
+
 export async function deleteCampaignCharacter(
   campaignId: string,
   characterId: string,
@@ -1162,6 +1306,7 @@ async function startCampaignCombatUnlocked(
           initiativeRoll: result.rawRoll,
           initiativeBonus: result.bonus,
           initiativeTotal: result.total,
+          armorClass: character.armorClass,
         };
       })
     : undefined;

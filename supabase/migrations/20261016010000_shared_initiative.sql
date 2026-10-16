@@ -1,7 +1,11 @@
 alter table public.combat_lobbies
   add column if not exists combat_started_at timestamptz,
   add column if not exists current_round integer not null default 1
-    check (current_round >= 1);
+    check (current_round >= 1),
+  add column if not exists visibility_revision integer not null default 0
+    check (visibility_revision >= 0),
+  add column if not exists initiative_schema_version integer not null default 0
+    check (initiative_schema_version >= 0);
 
 alter table public.combat_lobby_characters
   add column if not exists initiative_bonus integer not null default 0
@@ -35,6 +39,29 @@ create table if not exists public.combat_lobby_private_participants (
 create index if not exists combat_lobby_private_participants_initiative
   on public.combat_lobby_private_participants (lobby_id, initiative_key);
 
+create or replace function public.notify_combat_lobby_participant_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_lobby_id uuid;
+begin
+  target_lobby_id := case when tg_op = 'DELETE' then old.lobby_id else new.lobby_id end;
+  update public.combat_lobbies
+  set visibility_revision = visibility_revision + 1
+  where id = target_lobby_id;
+  return null;
+end;
+$$;
+
+drop trigger if exists combat_lobby_participant_visibility_changed
+  on public.combat_lobby_private_participants;
+create trigger combat_lobby_participant_visibility_changed
+after insert or update or delete on public.combat_lobby_private_participants
+for each row execute function public.notify_combat_lobby_participant_change();
+
 create table if not exists public.combat_lobby_initiative_results (
   lobby_id uuid not null references public.combat_lobbies(id) on delete cascade,
   initiative_key text not null,
@@ -54,6 +81,16 @@ create table if not exists public.combat_lobby_initiative_results (
 
 create index if not exists combat_lobby_initiative_order
   on public.combat_lobby_initiative_results (lobby_id, total desc, sort_order);
+
+create table if not exists public.combat_lobby_initiative_actors (
+  lobby_id uuid not null,
+  initiative_key text not null,
+  submitted_by uuid not null references auth.users(id) on delete cascade,
+  primary key (lobby_id, initiative_key),
+  foreign key (lobby_id, initiative_key)
+    references public.combat_lobby_initiative_results(lobby_id, initiative_key)
+    on delete cascade
+);
 
 create or replace function public.can_read_combat_lobby_initiative(
   target_lobby_id uuid,
@@ -81,14 +118,14 @@ as $$
         l.owner_id = (select auth.uid())
         or target_participant_type = 'character'
         or (
-          target_participant_type = 'enemy'
+          target_participant_type in ('enemy', 'ally')
           and l.combat_started_at is not null
           and exists (
             select 1
             from public.combat_lobby_private_participants p
             where p.lobby_id = target_lobby_id
               and p.initiative_key = target_initiative_key
-              and p.participant_type = 'enemy'
+              and p.participant_type = target_participant_type
               and p.is_active
               and not p.is_hidden
               and p.status = 'active'
@@ -161,9 +198,9 @@ begin
   end if;
 
   insert into public.combat_lobbies (
-    owner_id, campaign_id, encounter_id, encounter_name
+    owner_id, campaign_id, encounter_id, encounter_name, initiative_schema_version
   ) values (
-    current_user_id, trim(p_campaign_id), trim(p_encounter_id), trim(p_encounter_name)
+    current_user_id, trim(p_campaign_id), trim(p_encounter_id), trim(p_encounter_name), 1
   ) returning id into new_lobby_id;
 
   loop
@@ -310,6 +347,69 @@ begin
 end;
 $$;
 
+create or replace function public.claim_combat_lobby_character(
+  p_lobby_id uuid,
+  p_character_id text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_user_id uuid := auth.uid();
+  lobby_status text;
+  member_role text;
+  current_character_id text;
+begin
+  if current_user_id is null then
+    raise exception 'Sign in before claiming a character.';
+  end if;
+
+  select status into lobby_status
+  from public.combat_lobbies
+  where id = p_lobby_id
+  for update;
+  if lobby_status is distinct from 'open' then
+    raise exception 'This lobby is closed.';
+  end if;
+
+  select role, claimed_character_id
+  into member_role, current_character_id
+  from public.combat_lobby_members
+  where lobby_id = p_lobby_id and user_id = current_user_id
+  for update;
+  if member_role is null then
+    raise exception 'Join this lobby before claiming a character.';
+  end if;
+  if member_role <> 'player' then
+    raise exception 'The DM does not claim a player character.';
+  end if;
+  if current_character_id is distinct from p_character_id and exists (
+    select 1
+    from public.combat_lobby_initiative_results r
+    where r.lobby_id = p_lobby_id
+      and r.participant_type = 'character'
+      and r.participant_id = current_character_id
+  ) then
+    raise exception 'Your character is ready. Ask the DM to reset its initiative before changing your claim.';
+  end if;
+  if p_character_id is not null and not exists (
+    select 1 from public.combat_lobby_characters
+    where lobby_id = p_lobby_id and character_id = p_character_id
+  ) then
+    raise exception 'That character is not available in this lobby.';
+  end if;
+
+  update public.combat_lobby_members
+  set claimed_character_id = p_character_id
+  where lobby_id = p_lobby_id and user_id = current_user_id and role = 'player';
+exception
+  when unique_violation then
+    raise exception 'That character has already been claimed by another player.';
+end;
+$$;
+
 create or replace function public.submit_player_combat_initiative(
   p_lobby_id uuid,
   p_raw_roll integer default null
@@ -362,6 +462,16 @@ begin
   end if;
 
   result_key := 'character:' || character_row.character_id;
+  if exists (
+    select 1
+    from public.combat_lobby_initiative_actors actor
+    where actor.lobby_id = p_lobby_id
+      and actor.submitted_by = current_user_id
+      and actor.initiative_key <> result_key
+  ) then
+    raise exception 'Your device already submitted initiative for another character. Ask the DM to reset it first.';
+  end if;
+
   result_raw_roll := coalesce(p_raw_roll, floor(random() * 20)::integer + 1);
   result_total := result_raw_roll + character_row.initiative_bonus;
 
@@ -377,6 +487,9 @@ begin
       from public.combat_lobby_characters where lobby_id = p_lobby_id
     ) ordered_characters where character_id = character_row.character_id)
   );
+  insert into public.combat_lobby_initiative_actors (
+    lobby_id, initiative_key, submitted_by
+  ) values (p_lobby_id, result_key, current_user_id);
 
   return jsonb_build_object(
     'initiative_key', result_key,
@@ -409,12 +522,13 @@ declare
   saved_results jsonb := '[]'::jsonb;
   is_owner boolean;
   lobby_status text;
+  combat_started_at timestamptz;
 begin
   if auth.uid() is null then
     raise exception 'Sign in before rolling initiative.';
   end if;
-  select l.owner_id = auth.uid(), l.status
-  into is_owner, lobby_status
+  select l.owner_id = auth.uid(), l.status, l.combat_started_at
+  into is_owner, lobby_status, combat_started_at
   from public.combat_lobbies l
   where l.id = p_lobby_id
   for update;
@@ -423,6 +537,9 @@ begin
   end if;
   if lobby_status <> 'open' then
     raise exception 'The lobby is closed.';
+  end if;
+  if combat_started_at is not null then
+    raise exception 'Initiative can no longer be changed after combat starts.';
   end if;
   if p_raw_roll is not null and p_raw_roll not between 1 and 20 then
     raise exception 'A d20 result must be a whole number from 1 through 20.';
@@ -537,12 +654,18 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  lobby_row public.combat_lobbies%rowtype;
 begin
-  if auth.uid() is null or not exists (
-    select 1 from public.combat_lobbies
-    where id = p_lobby_id and owner_id = auth.uid()
-  ) then
-    raise exception 'Only the DM who created this lobby can reset initiative.';
+  if auth.uid() is null then
+    raise exception 'Only the DM can reset initiative before combat starts.';
+  end if;
+  select * into lobby_row
+  from public.combat_lobbies
+  where id = p_lobby_id and owner_id = auth.uid()
+  for update;
+  if not found or lobby_row.status <> 'open' or lobby_row.combat_started_at is not null then
+    raise exception 'Only the DM can reset initiative before combat starts.';
   end if;
   delete from public.combat_lobby_initiative_results
   where lobby_id = p_lobby_id and initiative_key = p_initiative_key;
@@ -617,13 +740,13 @@ begin
       lobby_member_role = 'dm'
       or r.participant_type = 'character'
       or (
-        r.participant_type = 'enemy'
+        r.participant_type in ('enemy', 'ally')
         and lobby_row.combat_started_at is not null
         and exists (
           select 1 from public.combat_lobby_private_participants p
           where p.lobby_id = r.lobby_id
             and p.initiative_key = r.initiative_key
-            and p.participant_type = 'enemy'
+            and p.participant_type = r.participant_type
             and p.is_active
             and not p.is_hidden
             and p.status = 'active'
@@ -698,10 +821,13 @@ begin
   return jsonb_build_object(
     'lobby_id', lobby_row.id,
     'owner_id', lobby_row.owner_id,
+    'encounter_id', lobby_row.encounter_id,
     'encounter_name', lobby_row.encounter_name,
     'status', lobby_row.status,
     'combat_started', lobby_row.combat_started_at is not null,
     'current_round', lobby_row.current_round,
+    'visibility_revision', lobby_row.visibility_revision,
+    'initiative_schema_version', lobby_row.initiative_schema_version,
     'role', lobby_member_role,
     'members', lobby_members,
     'characters', lobby_characters,
@@ -719,8 +845,10 @@ $$;
 
 alter table public.combat_lobby_private_participants enable row level security;
 alter table public.combat_lobby_initiative_results enable row level security;
+alter table public.combat_lobby_initiative_actors enable row level security;
 revoke all on public.combat_lobby_private_participants from anon, authenticated;
 revoke all on public.combat_lobby_initiative_results from anon, authenticated;
+revoke all on public.combat_lobby_initiative_actors from anon, authenticated;
 grant select on public.combat_lobby_initiative_results to authenticated;
 
 drop policy if exists "Lobby members read permitted initiative results"
