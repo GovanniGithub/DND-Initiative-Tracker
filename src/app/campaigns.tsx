@@ -195,6 +195,13 @@ export default function CampaignsScreen() {
           }}
           style={styles.createButton}
         />
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.push('/lobby')}
+          style={styles.joinLobbyButton}
+        >
+          <Text style={styles.joinLobbyButtonText}>Join Online Lobby</Text>
+        </Pressable>
 
         {(isLoading || loadError || campaigns.length > 0) && (
           <View style={styles.campaignListRegion}>
@@ -502,6 +509,25 @@ const styles = StyleSheet.create({
     top: '20.8%',
     height: '8.2%',
   },
+  joinLobbyButton: {
+    position: 'absolute',
+    top: '30.1%',
+    left: '6%',
+    right: '6%',
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 6,
+    backgroundColor: 'rgba(5, 14, 22, 0.94)',
+  },
+  joinLobbyButtonText: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   emptyStateArtwork: {
     ...StyleSheet.absoluteFill,
   },
@@ -513,7 +539,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: '5%',
     right: '5%',
-    top: '30%',
+    top: '37%',
     bottom: '3.5%',
     overflow: 'hidden',
   },

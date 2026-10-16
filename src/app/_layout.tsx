@@ -20,6 +20,13 @@ export default function TabLayout() {
           }}
         />
         <Stack.Screen
+          name="lobby"
+          options={{
+            animation: 'slide_from_right',
+            contentStyle: { backgroundColor: '#030A12' },
+          }}
+        />
+        <Stack.Screen
           name="campaign/[id]"
           options={{
             presentation: 'fullScreenModal',

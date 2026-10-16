@@ -3,15 +3,40 @@ import {
   addCampaignCharacter,
   advanceCampaignCombat,
   deleteCampaignCharacter,
+  deleteCampaignEncounter,
   endCampaignCombat,
+  getCampaignInitiativeKey,
   loadCampaigns,
+  resetCampaignEncounterInitiative,
+  saveCampaignCustomEnemyPreset,
+  saveCampaignEncounterInitiative,
+  saveCampaignEncounter,
   setCampaignCharacterStatus,
   startCampaignCombat,
+  updateCampaignCombatantHp,
   updateCampaignCharacterInitiative,
   type Campaign,
   type CampaignCharacter,
+  type CampaignCombatAlly,
+  type CampaignCustomEnemyPreset,
+  type CampaignEncounterEnemyInput,
+  type CampaignEncounter,
 } from '@/storage/campaigns';
+import {
+  claimOnlineLobbyCharacter,
+  closeOnlineCombatLobby,
+  createOnlineCombatLobby,
+  loadOnlineLobbySnapshot,
+  subscribeToOnlineCombatLobby,
+  type OnlineLobbySnapshot,
+} from '@/storage/online-lobbies';
+import {
+  ensureSupabaseIdentity,
+  isSupabaseConfigured,
+  type SupabaseIdentity,
+} from '@/lib/supabase';
 import Slider from '@react-native-community/slider';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
@@ -27,6 +52,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  type ImageSourcePropType,
   View,
   useWindowDimensions,
 } from 'react-native';
@@ -48,9 +74,242 @@ const CHARACTER_CLASSES = [
   'Warlock',
   'Wizard',
 ];
+type CharacterPreset = {
+  id: string;
+  name: string;
+  race: string;
+  className: string;
+  source: ImageSourcePropType;
+};
+const CHARACTER_PRESETS: CharacterPreset[] = [
+  {
+    id: 'dragonborn-wizard',
+    name: 'Dragonborn Mage',
+    race: 'Dragonborn',
+    className: 'Wizard',
+    source: require('../../../assets/images/character-presets/dragonborn-wizard.jpg'),
+  },
+  {
+    id: 'tiefling-bard',
+    name: 'Tiefling Bard',
+    race: 'Tiefling',
+    className: 'Bard',
+    source: require('../../../assets/images/character-presets/tiefling-bard.jpg'),
+  },
+  {
+    id: 'halfling-rogue',
+    name: 'Halfling Rogue',
+    race: 'Halfling',
+    className: 'Rogue',
+    source: require('../../../assets/images/character-presets/halfling-rogue.jpg'),
+  },
+  {
+    id: 'dwarf-cleric',
+    name: 'Dwarf Cleric',
+    race: 'Dwarf',
+    className: 'Cleric',
+    source: require('../../../assets/images/character-presets/dwarf-cleric.jpg'),
+  },
+  {
+    id: 'elf-ranger',
+    name: 'Elf Ranger',
+    race: 'Elf',
+    className: 'Ranger',
+    source: require('../../../assets/images/character-presets/elf-ranger.jpg'),
+  },
+  {
+    id: 'human-fighter',
+    name: 'Human Knight',
+    race: 'Human',
+    className: 'Fighter',
+    source: require('../../../assets/images/character-presets/human-fighter.jpg'),
+  },
+];
+const ENCOUNTER_ARTWORK = [
+  require('../../../assets/images/campaign-cover-haunted-city.jpg'),
+  require('../../../assets/images/campaign-cover-desert-ruins.jpg'),
+  require('../../../assets/images/campaign-cover-sunlit-bay.jpg'),
+];
+const ENEMY_PRESETS = [
+  {
+    id: 'owlbear',
+    name: 'Owlbear',
+    initiative: 1,
+    source: require('../../../assets/images/encounter-enemies/owlbear.png'),
+  },
+  {
+    id: 'zombie',
+    name: 'Zombie',
+    initiative: -2,
+    source: require('../../../assets/images/encounter-enemies/zombie.png'),
+  },
+  {
+    id: 'lich',
+    name: 'Lich',
+    initiative: 2,
+    source: require('../../../assets/images/encounter-enemies/lich.jpg'),
+  },
+  {
+    id: 'dragon',
+    name: 'Dragon',
+    initiative: 2,
+    source: require('../../../assets/images/encounter-enemies/dragon.jpg'),
+  },
+  {
+    id: 'cultist',
+    name: 'Cultist',
+    initiative: 1,
+    source: require('../../../assets/images/encounter-enemies/cultist.jpg'),
+  },
+  {
+    id: 'knight',
+    name: 'Knight',
+    initiative: 0,
+    source: require('../../../assets/images/encounter-enemies/knight.jpg'),
+  },
+  {
+    id: 'necromancer',
+    name: 'Necromancer',
+    initiative: 2,
+    source: require('../../../assets/images/encounter-enemies/necromancer.jpg'),
+  },
+  {
+    id: 'bandit',
+    name: 'Bandit',
+    initiative: 2,
+    source: require('../../../assets/images/encounter-enemies/bandit.jpg'),
+  },
+  {
+    id: 'vampire',
+    name: 'Vampire',
+    initiative: 3,
+    source: require('../../../assets/images/encounter-enemies/vampire.jpg'),
+  },
+  {
+    id: 'ogre',
+    name: 'Ogre',
+    initiative: -1,
+    source: require('../../../assets/images/encounter-enemies/ogre.jpg'),
+  },
+  {
+    id: 'spider',
+    name: 'Spider',
+    initiative: 3,
+    source: require('../../../assets/images/encounter-enemies/spider.jpg'),
+  },
+  {
+    id: 'wolf',
+    name: 'Wolf',
+    initiative: 2,
+    source: require('../../../assets/images/encounter-enemies/wolf.jpg'),
+  },
+  {
+    id: 'goblin',
+    name: 'Goblin',
+    initiative: 2,
+    source: require('../../../assets/images/encounter-enemies/goblin.png'),
+  },
+  {
+    id: 'skeleton',
+    name: 'Skeleton',
+    initiative: 2,
+    source: require('../../../assets/images/encounter-enemies/skeleton.png'),
+  },
+  {
+    id: 'mimic',
+    name: 'Mimic',
+    initiative: 0,
+    source: require('../../../assets/images/encounter-enemies/mimic.png'),
+  },
+];
+
+type EnemyForm = {
+  name: string;
+  imageId: string;
+  imageUri?: string;
+  quantity: string;
+  initiative: string;
+  initiativeMode: 'individual' | 'horde';
+  maxHp: string;
+};
+
+function getEnemyImage(imageId?: string, customPresets: CampaignCustomEnemyPreset[] = []) {
+  const customPreset = customPresets.find((preset) => preset.id === imageId);
+  if (customPreset) return { uri: customPreset.imageUri };
+  return ENEMY_PRESETS.find((preset) => preset.id === imageId)?.source ??
+    ENEMY_PRESETS[4].source;
+}
+
+type InitiativeEntry = {
+  id: string;
+  name: string;
+  initiative: number;
+  initiativeRoll?: number;
+  initiativeBonus?: number;
+  initiativeTotal?: number;
+  className?: string;
+  race?: string;
+  portraitUri?: string | null;
+  portraitPresetId?: string;
+  maxHp?: number;
+  currentHp?: number;
+};
+
+function getCharacterPortraitSource(
+  portraitPresetId?: string,
+  portraitUri?: string | null,
+): ImageSourcePropType | undefined {
+  const preset = CHARACTER_PRESETS.find((item) => item.id === portraitPresetId);
+  if (preset) return preset.source;
+  return portraitUri ? { uri: portraitUri } : undefined;
+}
 
 function getInitiativeOrder(characters: CampaignCharacter[]): CampaignCharacter[] {
   return [...characters].sort((left, right) => right.initiative - left.initiative);
+}
+
+function CharacterPresetPicker({
+  selectedPresetId,
+  onSelect,
+}: {
+  selectedPresetId: string | null;
+  onSelect: (preset: CharacterPreset) => void;
+}) {
+  return (
+    <View style={styles.characterPresetSection}>
+      <Text style={styles.fieldLabel}>Character presets</Text>
+      <Text style={styles.characterPresetHint}>
+        Choose a portrait preset or enter a custom character below.
+      </Text>
+      <View style={styles.characterPresetGrid}>
+        {CHARACTER_PRESETS.map((preset) => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: selectedPresetId === preset.id }}
+            key={preset.id}
+            onPress={() => onSelect(preset)}
+            style={[
+              styles.characterPresetCard,
+              selectedPresetId === preset.id && styles.characterPresetCardSelected,
+            ]}
+          >
+            <Image
+              accessibilityLabel={`${preset.name} preset portrait`}
+              resizeMode="cover"
+              source={preset.source}
+              style={styles.characterPresetImage}
+            />
+            <Text numberOfLines={1} style={styles.characterPresetName}>
+              {preset.name}
+            </Text>
+            <Text numberOfLines={1} style={styles.characterPresetClass}>
+              {preset.race} · {preset.className}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
 }
 
 export default function CampaignDetailScreen() {
@@ -67,10 +326,12 @@ export default function CampaignDetailScreen() {
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [isCharacterModalVisible, setIsCharacterModalVisible] = useState(false);
   const [characterName, setCharacterName] = useState('');
+  const [characterRace, setCharacterRace] = useState('');
   const [characterClass, setCharacterClass] = useState('');
   const [characterInitiative, setCharacterInitiative] = useState(0);
   const [initiativeSliderKey, setInitiativeSliderKey] = useState(0);
   const [characterPortraitUri, setCharacterPortraitUri] = useState<string | null>(null);
+  const [characterPortraitPresetId, setCharacterPortraitPresetId] = useState<string | null>(null);
   const [isPickingPortrait, setIsPickingPortrait] = useState(false);
   const [isSavingCharacter, setIsSavingCharacter] = useState(false);
   const [selectedCharacter, setSelectedCharacter] = useState<CampaignCharacter | null>(null);
@@ -81,6 +342,42 @@ export default function CampaignDetailScreen() {
   const [isUpdatingCharacter, setIsUpdatingCharacter] = useState(false);
   const [isCombatModalVisible, setIsCombatModalVisible] = useState(false);
   const [isUpdatingCombat, setIsUpdatingCombat] = useState(false);
+  const [initiativeRollInputs, setInitiativeRollInputs] = useState<Record<string, string>>({});
+  const [isEncounterEditorVisible, setIsEncounterEditorVisible] = useState(false);
+  const [editingEncounterId, setEditingEncounterId] = useState<string | null>(null);
+  const [encounterName, setEncounterName] = useState('');
+  const [encounterEnemies, setEncounterEnemies] = useState<CampaignEncounterEnemyInput[]>([]);
+  const [encounterAllies, setEncounterAllies] = useState<CampaignCombatAlly[]>([]);
+  const [isSavingEncounter, setIsSavingEncounter] = useState(false);
+  const [isDeletingEncounter, setIsDeletingEncounter] = useState(false);
+  const [isDeleteEncounterConfirmVisible, setIsDeleteEncounterConfirmVisible] = useState(false);
+  const [onlineIdentity, setOnlineIdentity] = useState<SupabaseIdentity | null>(null);
+  const [isOnlineIdentityLoading, setIsOnlineIdentityLoading] = useState(true);
+  const [onlineIdentityError, setOnlineIdentityError] = useState<string | null>(null);
+  const [onlineLobby, setOnlineLobby] = useState<OnlineLobbySnapshot | null>(null);
+  const [isOnlineLobbyVisible, setIsOnlineLobbyVisible] = useState(false);
+  const [isOnlineLobbyBusy, setIsOnlineLobbyBusy] = useState(false);
+  const [onlineLobbyError, setOnlineLobbyError] = useState<string | null>(null);
+  const [isEnemyPickerVisible, setIsEnemyPickerVisible] = useState(false);
+  const [enemySearch, setEnemySearch] = useState('');
+  const [enemyForm, setEnemyForm] = useState<EnemyForm | null>(null);
+  const [editingEnemyIndex, setEditingEnemyIndex] = useState<number | null>(null);
+  const [enemyFormError, setEnemyFormError] = useState<string | null>(null);
+  const [isPickingEnemyImage, setIsPickingEnemyImage] = useState(false);
+  const [isSavingEnemyPreset, setIsSavingEnemyPreset] = useState(false);
+  const [selectedEncounter, setSelectedEncounter] = useState<CampaignEncounter | null>(null);
+  const [isEncounterLobbyVisible, setIsEncounterLobbyVisible] = useState(false);
+  const [isAddingCombatAlly, setIsAddingCombatAlly] = useState(false);
+  const [combatAllyName, setCombatAllyName] = useState('');
+  const [combatAllyRace, setCombatAllyRace] = useState('');
+  const [combatAllyClass, setCombatAllyClass] = useState('');
+  const [combatAllyInitiative, setCombatAllyInitiative] = useState(0);
+  const [combatAllyMaxHp, setCombatAllyMaxHp] = useState('10');
+  const [combatAllyPortraitUri, setCombatAllyPortraitUri] = useState<string | null>(null);
+  const [combatAllyPortraitPresetId, setCombatAllyPortraitPresetId] = useState<string | null>(null);
+  const [isPickingCombatAllyPortrait, setIsPickingCombatAllyPortrait] = useState(false);
+  const [isSavingCombatAlly, setIsSavingCombatAlly] = useState(false);
+  const [combatAllyError, setCombatAllyError] = useState<string | null>(null);
 
   async function handlePickCharacterPortrait() {
     setIsPickingPortrait(true);
@@ -106,10 +403,138 @@ export default function CampaignDetailScreen() {
       } else {
         setCharacterPortraitUri(asset.uri);
       }
+      setCharacterPortraitPresetId(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Portrait could not be selected.');
     } finally {
       setIsPickingPortrait(false);
+    }
+  }
+
+  function openCombatAllyForm() {
+    setCombatAllyName('');
+    setCombatAllyRace('');
+    setCombatAllyClass('');
+    setCombatAllyInitiative(0);
+    setCombatAllyMaxHp('10');
+    setCombatAllyPortraitUri(null);
+    setCombatAllyPortraitPresetId(null);
+    setCombatAllyError(null);
+    setIsAddingCombatAlly(true);
+  }
+
+  function chooseCharacterPreset(preset: CharacterPreset) {
+    setCharacterName(preset.name);
+    setCharacterRace(preset.race);
+    setCharacterClass(preset.className);
+    setCharacterPortraitUri(null);
+    setCharacterPortraitPresetId(preset.id);
+  }
+
+  function chooseCombatAllyPreset(preset: CharacterPreset) {
+    setCombatAllyName(preset.name);
+    setCombatAllyRace(preset.race);
+    setCombatAllyClass(preset.className);
+    setCombatAllyPortraitUri(null);
+    setCombatAllyPortraitPresetId(preset.id);
+  }
+
+  async function handlePickCombatAllyPortrait() {
+    setIsPickingCombatAllyPortrait(true);
+    setCombatAllyError(null);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.75,
+        base64: Platform.OS === 'web',
+      });
+      if (result.canceled) return;
+
+      const asset = result.assets[0];
+      let sourceUri = asset.uri;
+      if (Platform.OS === 'web') {
+        if (!asset.base64) {
+          throw new Error('The ally photo could not be read. Please choose it again.');
+        }
+        sourceUri = `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`;
+      }
+      const cropSize = Math.min(asset.width, asset.height);
+      if (cropSize < 1) throw new Error('The selected ally photo has invalid dimensions.');
+
+      const manipulator = ImageManipulator.manipulate(sourceUri);
+      manipulator
+        .crop({
+          originX: Math.floor((asset.width - cropSize) / 2),
+          originY: Math.floor((asset.height - cropSize) / 2),
+          width: cropSize,
+          height: cropSize,
+        })
+        .resize({ width: 384, height: 384 });
+      const renderedImage = await manipulator.renderAsync();
+      const resizedImage = await renderedImage.saveAsync({
+        format: SaveFormat.JPEG,
+        compress: 0.72,
+        base64: Platform.OS === 'web',
+      });
+      let portraitUri = resizedImage.uri;
+      if (Platform.OS === 'web') {
+        if (!resizedImage.base64) {
+          throw new Error('The resized ally photo could not be saved. Please choose it again.');
+        }
+        portraitUri = `data:image/jpeg;base64,${resizedImage.base64}`;
+      }
+      setCombatAllyPortraitUri(portraitUri);
+      setCombatAllyPortraitPresetId(null);
+    } catch (error) {
+      setCombatAllyError(
+        error instanceof Error ? error.message : 'Ally photo could not be selected.',
+      );
+    } finally {
+      setIsPickingCombatAllyPortrait(false);
+    }
+  }
+
+  async function handleAddCombatAlly() {
+    if (isSavingCombatAlly) return;
+    if (!combatAllyName.trim()) {
+      setCombatAllyError('Enter an ally name.');
+      return;
+    }
+    if (!combatAllyClass) {
+      setCombatAllyError('Choose an ally class.');
+      return;
+    }
+    const maxHp = Number(combatAllyMaxHp);
+    if (!Number.isInteger(maxHp) || maxHp < 1 || maxHp > 9999) {
+      setCombatAllyError('HP must be a whole number from 1 to 9999.');
+      return;
+    }
+
+    setIsSavingCombatAlly(true);
+    setCombatAllyError(null);
+    try {
+      const ally: CampaignCombatAlly = {
+        id: `combat-ally-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+        name: combatAllyName,
+        className: combatAllyClass,
+        ...(combatAllyRace.trim() ? { race: combatAllyRace.trim() } : {}),
+        initiative: combatAllyInitiative,
+        portraitUri: combatAllyPortraitUri,
+        ...(combatAllyPortraitPresetId
+          ? { portraitPresetId: combatAllyPortraitPresetId }
+          : {}),
+        maxHp,
+      };
+      setEncounterAllies((current) => [...current, ally]);
+      setIsAddingCombatAlly(false);
+    } catch (error) {
+      setCombatAllyError(
+        error instanceof Error ? error.message : 'Temporary ally could not be added.',
+      );
+    } finally {
+      setIsSavingCombatAlly(false);
     }
   }
 
@@ -143,6 +568,77 @@ export default function CampaignDetailScreen() {
     };
   }, [id, loadAttempt]);
 
+  useEffect(() => {
+    let isActive = true;
+    if (!isSupabaseConfigured()) {
+      setIsOnlineIdentityLoading(false);
+      return () => {
+        isActive = false;
+      };
+    }
+
+    void ensureSupabaseIdentity()
+      .then((identity) => {
+        if (isActive) setOnlineIdentity(identity);
+      })
+      .catch((error: unknown) => {
+        if (isActive) {
+          setOnlineIdentityError(
+            error instanceof Error ? error.message : 'Online device identity could not be created.',
+          );
+        }
+      })
+      .finally(() => {
+        if (isActive) setIsOnlineIdentityLoading(false);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const lobbyId = onlineLobby?.lobby_id;
+    if (!onlineIdentity || !lobbyId || !isOnlineLobbyVisible) return;
+    let isActive = true;
+    let isRefreshing = false;
+    let refreshAgain = false;
+    const refreshSnapshot = async () => {
+      if (isRefreshing) {
+        refreshAgain = true;
+        return;
+      }
+      isRefreshing = true;
+      do {
+        refreshAgain = false;
+        try {
+          const snapshot = await loadOnlineLobbySnapshot(onlineIdentity, lobbyId);
+          if (isActive) setOnlineLobby(snapshot);
+        } catch (error) {
+          if (isActive) {
+            setOnlineLobbyError(
+              error instanceof Error ? error.message : 'Online lobby could not be refreshed.',
+            );
+          }
+        }
+      } while (isActive && refreshAgain);
+      isRefreshing = false;
+    };
+    setOnlineLobbyError(null);
+    const unsubscribe = subscribeToOnlineCombatLobby(
+      onlineIdentity,
+      lobbyId,
+      () => void refreshSnapshot(),
+      (message) => {
+        if (isActive) setOnlineLobbyError(message);
+      },
+    );
+    void refreshSnapshot();
+    return () => {
+      isActive = false;
+      unsubscribe();
+    };
+  }, [onlineIdentity, onlineLobby?.lobby_id, isOnlineLobbyVisible]);
+
   async function handleAddCharacter() {
     if (!campaign || isSavingCharacter) return;
     setIsSavingCharacter(true);
@@ -150,16 +646,22 @@ export default function CampaignDetailScreen() {
     try {
       const updatedCampaign = await addCampaignCharacter(campaign.id, {
         name: characterName,
+        race: characterRace.trim(),
         className: characterClass,
         initiative: characterInitiative,
         portraitUri: characterPortraitUri,
+        ...(characterPortraitPresetId
+          ? { portraitPresetId: characterPortraitPresetId }
+          : {}),
       });
       setCampaign(updatedCampaign);
       setCharacterName('');
+      setCharacterRace('');
       setCharacterClass('');
       setCharacterInitiative(0);
       setInitiativeSliderKey((key) => key + 1);
       setCharacterPortraitUri(null);
+      setCharacterPortraitPresetId(null);
       setIsCharacterModalVisible(false);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Character could not be saved.');
@@ -168,14 +670,17 @@ export default function CampaignDetailScreen() {
     }
   }
 
-  async function handleSetCharacterStatus(status: 'active' | 'stored' | 'dead') {
-    if (!campaign || !selectedCharacter || isUpdatingCharacter) return;
+  async function handleSetCharacterStatus(
+    status: 'active' | 'stored' | 'dead',
+    character = selectedCharacter,
+  ) {
+    if (!campaign || !character || isUpdatingCharacter) return;
     setIsUpdatingCharacter(true);
     setActionError(null);
     try {
       const updatedCampaign = await setCampaignCharacterStatus(
         campaign.id,
-        selectedCharacter.id,
+        character.id,
         status,
       );
       setCampaign(updatedCampaign);
@@ -235,21 +740,6 @@ export default function CampaignDetailScreen() {
     }
   }
 
-  async function handleStartCombat() {
-    if (!campaign || isUpdatingCombat) return;
-    setIsUpdatingCombat(true);
-    setActionError(null);
-    try {
-      const updatedCampaign = await startCampaignCombat(campaign.id);
-      setCampaign(updatedCampaign);
-      setIsCombatModalVisible(true);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Combat could not be started.');
-    } finally {
-      setIsUpdatingCombat(false);
-    }
-  }
-
   async function handleAdvanceCombat() {
     if (!campaign || isUpdatingCombat) return;
     setIsUpdatingCombat(true);
@@ -258,6 +748,28 @@ export default function CampaignDetailScreen() {
       setCampaign(await advanceCampaignCombat(campaign.id));
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Combat turn could not be advanced.');
+    } finally {
+      setIsUpdatingCombat(false);
+    }
+  }
+
+  async function handleAdjustCombatantHp(
+    combatantId: string,
+    currentHp: number,
+    maxHp: number,
+    delta: number,
+  ) {
+    if (!campaign || isUpdatingCombat) return;
+    const nextHp = Math.max(0, Math.min(maxHp, currentHp + delta));
+    if (nextHp === currentHp) return;
+    setIsUpdatingCombat(true);
+    setActionError(null);
+    try {
+      setCampaign(await updateCampaignCombatantHp(campaign.id, combatantId, nextHp));
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Combatant HP could not be updated.',
+      );
     } finally {
       setIsUpdatingCombat(false);
     }
@@ -277,25 +789,683 @@ export default function CampaignDetailScreen() {
     }
   }
 
+  function openEncounterEditor(encounter?: CampaignEncounter) {
+    setActionError(null);
+    setEditingEncounterId(encounter?.id ?? null);
+    setEncounterName(encounter?.name ?? '');
+    setEncounterEnemies(
+      encounter?.enemies.map((enemy) => ({
+        name: enemy.name,
+        imageId: enemy.imageId ?? 'skeleton',
+        imageUri: campaign?.customEnemyPresets?.find((preset) => preset.id === enemy.imageId)
+          ?.imageUri,
+        quantity: enemy.quantity ?? 1,
+        initiative: enemy.initiative,
+        initiativeMode: enemy.initiativeMode ?? 'individual',
+        maxHp: enemy.maxHp ?? 10,
+      })) ?? [],
+    );
+    setEncounterAllies(
+      (encounter?.allies ?? []).map((ally) => ({
+        ...ally,
+        maxHp: ally.maxHp ?? 10,
+        currentHp: undefined,
+      })),
+    );
+    setIsEnemyPickerVisible(false);
+    setEnemyForm(null);
+    setEnemySearch('');
+    setIsEncounterEditorVisible(true);
+  }
+
+  async function handleSaveEncounter(status: 'draft' | 'ready') {
+    if (!campaign || isSavingEncounter) return;
+    setIsSavingEncounter(true);
+    setActionError(null);
+    try {
+      const updatedCampaign = await saveCampaignEncounter(
+        campaign.id,
+        editingEncounterId,
+        encounterName,
+        encounterEnemies,
+        status,
+        encounterAllies,
+      );
+      setCampaign(updatedCampaign);
+      setIsEncounterEditorVisible(false);
+      setEditingEncounterId(null);
+      setEncounterName('');
+      setEncounterEnemies([]);
+      setEncounterAllies([]);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Encounter could not be saved.');
+    } finally {
+      setIsSavingEncounter(false);
+    }
+  }
+
+  async function handleSaveEncounterAndOpenLobby() {
+    if (!campaign || isSavingEncounter) return;
+    setIsSavingEncounter(true);
+    setActionError(null);
+    try {
+      const updatedCampaign = await saveCampaignEncounter(
+        campaign.id,
+        editingEncounterId,
+        encounterName,
+        encounterEnemies,
+        'ready',
+        encounterAllies,
+      );
+      const encounter =
+        updatedCampaign.encounters?.find((item) => item.id === editingEncounterId) ??
+        updatedCampaign.encounters?.[updatedCampaign.encounters.length - 1];
+      if (!encounter) throw new Error('The encounter could not be loaded after saving.');
+      setCampaign(updatedCampaign);
+      setSelectedEncounter(encounter);
+      setIsEncounterEditorVisible(false);
+      setIsEncounterLobbyVisible(true);
+      setEditingEncounterId(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Encounter could not be saved.');
+    } finally {
+      setIsSavingEncounter(false);
+    }
+  }
+
+  function openEnemyPicker(enemy?: CampaignEncounterEnemyInput, index?: number) {
+    setEnemyFormError(null);
+    setEnemySearch('');
+    setEditingEnemyIndex(index ?? null);
+    setEnemyForm(
+      enemy
+        ? {
+            name: enemy.name,
+            imageId: enemy.imageId,
+            imageUri: enemy.imageUri ??
+              campaign?.customEnemyPresets?.find((preset) => preset.id === enemy.imageId)
+                ?.imageUri,
+            quantity: String(enemy.quantity),
+            initiative: String(enemy.initiative),
+            initiativeMode: enemy.initiativeMode,
+            maxHp: String(enemy.maxHp ?? 10),
+          }
+        : null,
+    );
+    setIsEnemyPickerVisible(true);
+  }
+
+  function chooseEnemyPreset(presetId: string) {
+    const preset = ENEMY_PRESETS.find((item) => item.id === presetId);
+    if (!preset) return;
+    setEnemyForm((current) => {
+      const presetChanged = current?.imageId !== preset.id;
+      return {
+        name: !current || presetChanged ? preset.name : current.name,
+        imageId: preset.id,
+        quantity: current?.quantity ?? '1',
+        initiative: !current || presetChanged
+          ? String(preset.initiative)
+          : current.initiative,
+        initiativeMode: current?.initiativeMode ?? 'individual',
+        maxHp: current?.maxHp ?? '10',
+      };
+    });
+    setEnemyFormError(null);
+  }
+
+  function chooseCustomEnemyPreset(preset: CampaignCustomEnemyPreset) {
+    setEnemyForm((current) => {
+      const presetChanged = current?.imageId !== preset.id;
+      return {
+        name: !current || presetChanged ? preset.name : current.name,
+        imageId: preset.id,
+        imageUri: preset.imageUri,
+        quantity: current?.quantity ?? '1',
+        initiative: !current || presetChanged
+          ? String(preset.initiative)
+          : current.initiative,
+        initiativeMode: current?.initiativeMode ?? 'individual',
+        maxHp: current?.maxHp ?? '10',
+      };
+    });
+    setEnemyFormError(null);
+  }
+
+  async function handlePickCustomEnemyImage() {
+    setIsPickingEnemyImage(true);
+    setEnemyFormError(null);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.75,
+        base64: Platform.OS === 'web',
+      });
+      if (result.canceled) return;
+
+      const asset = result.assets[0];
+      let sourceUri = asset.uri;
+      if (Platform.OS === 'web') {
+        if (!asset.base64) {
+          throw new Error('The selected enemy photo could not be read. Please choose it again.');
+        }
+        sourceUri = `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`;
+      }
+
+      const cropSize = Math.min(asset.width, asset.height);
+      if (cropSize < 1) throw new Error('The selected enemy photo has invalid dimensions.');
+      const manipulator = ImageManipulator.manipulate(sourceUri);
+      manipulator
+        .crop({
+          originX: Math.floor((asset.width - cropSize) / 2),
+          originY: Math.floor((asset.height - cropSize) / 2),
+          width: cropSize,
+          height: cropSize,
+        })
+        .resize({ width: 384, height: 384 });
+      const renderedImage = await manipulator.renderAsync();
+      const resizedImage = await renderedImage.saveAsync({
+        format: SaveFormat.JPEG,
+        compress: 0.72,
+        base64: Platform.OS === 'web',
+      });
+      let imageUri = resizedImage.uri;
+      if (Platform.OS === 'web') {
+        if (!resizedImage.base64) {
+          throw new Error('The resized enemy photo could not be saved. Please choose it again.');
+        }
+        imageUri = `data:image/jpeg;base64,${resizedImage.base64}`;
+      }
+
+      setEnemyForm((current) => ({
+        name: current?.name ?? 'Custom Enemy',
+        imageId: '',
+        imageUri,
+        quantity: current?.quantity ?? '1',
+        initiative: current?.initiative ?? '0',
+        initiativeMode: current?.initiativeMode ?? 'individual',
+        maxHp: current?.maxHp ?? '10',
+      }));
+    } catch (error) {
+      setEnemyFormError(
+        error instanceof Error ? error.message : 'Enemy photo could not be selected.',
+      );
+    } finally {
+      setIsPickingEnemyImage(false);
+    }
+  }
+
+  async function handleAddEnemyToEncounter() {
+    if (!enemyForm) {
+      setEnemyFormError('Choose a creature image first.');
+      return;
+    }
+    const quantity = Number(enemyForm.quantity);
+    const initiative = Number(enemyForm.initiative);
+    const maxHp = Number(enemyForm.maxHp);
+    if (!enemyForm.name.trim()) {
+      setEnemyFormError('Enter an enemy name.');
+      return;
+    }
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      setEnemyFormError('Quantity must be a whole number from 1 to 99.');
+      return;
+    }
+    if (!Number.isInteger(initiative) || initiative < -20 || initiative > 30) {
+      setEnemyFormError('Initiative bonus must be a whole number from -20 to +30.');
+      return;
+    }
+    if (!Number.isInteger(maxHp) || maxHp < 1 || maxHp > 9999) {
+      setEnemyFormError('HP per enemy must be a whole number from 1 to 9999.');
+      return;
+    }
+    if (!enemyForm.imageId && !enemyForm.imageUri) {
+      setEnemyFormError('Choose a creature image first.');
+      return;
+    }
+
+    setIsSavingEnemyPreset(true);
+    setEnemyFormError(null);
+    try {
+      let imageId = enemyForm.imageId;
+      let imageUri = enemyForm.imageUri;
+      if (imageUri) {
+        if (!campaign) throw new Error('The campaign could not be loaded.');
+        const saved = await saveCampaignCustomEnemyPreset(
+          campaign.id,
+          imageId.startsWith('custom-') ? imageId : null,
+          enemyForm.name,
+          initiative,
+          imageUri,
+        );
+        setCampaign(saved.campaign);
+        imageId = saved.preset.id;
+        imageUri = saved.preset.imageUri;
+      }
+
+      const enemy: CampaignEncounterEnemyInput = {
+        name: enemyForm.name.trim(),
+        imageId,
+        imageUri,
+        quantity,
+        initiative,
+        initiativeMode: enemyForm.initiativeMode,
+        maxHp,
+      };
+      setEncounterEnemies((current) => {
+        if (editingEnemyIndex === null) return [...current, enemy];
+        return current.map((item, index) => (index === editingEnemyIndex ? enemy : item));
+      });
+      setIsEnemyPickerVisible(false);
+      setEnemyForm(null);
+      setEditingEnemyIndex(null);
+      setEnemyFormError(null);
+    } catch (error) {
+      setEnemyFormError(
+        error instanceof Error ? error.message : 'Custom enemy could not be saved.',
+      );
+    } finally {
+      setIsSavingEnemyPreset(false);
+    }
+  }
+
+  async function handleDeleteEncounter() {
+    if (!campaign || !selectedEncounter || isDeletingEncounter) return;
+    setIsDeletingEncounter(true);
+    setActionError(null);
+    try {
+      const updatedCampaign = await deleteCampaignEncounter(
+        campaign.id,
+        selectedEncounter.id,
+      );
+      setCampaign(updatedCampaign);
+      setSelectedEncounter(null);
+      setIsDeleteEncounterConfirmVisible(false);
+      setIsEncounterEditorVisible(false);
+      setIsEncounterLobbyVisible(false);
+      setEditingEncounterId(null);
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Combat encounter could not be deleted.',
+      );
+    } finally {
+      setIsDeletingEncounter(false);
+    }
+  }
+
+  async function handleStartEncounter(encounter: CampaignEncounter) {
+    if (!campaign || isUpdatingCombat) return;
+    setIsUpdatingCombat(true);
+    setActionError(null);
+    try {
+      const updatedCampaign = await startCampaignCombat(campaign.id, encounter.id);
+      setCampaign(updatedCampaign);
+      setSelectedEncounter(null);
+      setIsEncounterLobbyVisible(false);
+      setIsCombatModalVisible(true);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Encounter combat could not start.');
+    } finally {
+      setIsUpdatingCombat(false);
+    }
+  }
+
+  async function handleCreateOnlineLobby() {
+    if (!campaign || !selectedEncounter || isOnlineLobbyBusy) return;
+    setIsOnlineLobbyBusy(true);
+    setOnlineLobbyError(null);
+    try {
+      const identity = onlineIdentity ?? await ensureSupabaseIdentity();
+      if (!onlineIdentity) setOnlineIdentity(identity);
+      const snapshot = await createOnlineCombatLobby(
+        identity,
+        campaign.id,
+        selectedEncounter,
+        activeCharacters,
+      );
+      setOnlineLobby(snapshot);
+      setIsEncounterLobbyVisible(false);
+      setIsOnlineLobbyVisible(true);
+    } catch (error) {
+      setOnlineLobbyError(
+        error instanceof Error ? error.message : 'Online lobby could not be created.',
+      );
+    } finally {
+      setIsOnlineLobbyBusy(false);
+    }
+  }
+
+  async function handleClaimOnlineCharacter(characterId: string | null) {
+    if (!onlineIdentity || !onlineLobby || isOnlineLobbyBusy) return;
+    setIsOnlineLobbyBusy(true);
+    setOnlineLobbyError(null);
+    try {
+      await claimOnlineLobbyCharacter(onlineIdentity, onlineLobby.lobby_id, characterId);
+      setOnlineLobby(await loadOnlineLobbySnapshot(onlineIdentity, onlineLobby.lobby_id));
+    } catch (error) {
+      setOnlineLobbyError(
+        error instanceof Error ? error.message : 'Character claim could not be saved.',
+      );
+    } finally {
+      setIsOnlineLobbyBusy(false);
+    }
+  }
+
+  async function handleCloseOnlineLobby() {
+    if (!onlineIdentity || !onlineLobby || isOnlineLobbyBusy) return;
+    setIsOnlineLobbyBusy(true);
+    setOnlineLobbyError(null);
+    try {
+      await closeOnlineCombatLobby(onlineIdentity, onlineLobby.lobby_id);
+      setOnlineLobby(await loadOnlineLobbySnapshot(onlineIdentity, onlineLobby.lobby_id));
+    } catch (error) {
+      setOnlineLobbyError(
+        error instanceof Error ? error.message : 'Online lobby could not be closed.',
+      );
+    } finally {
+      setIsOnlineLobbyBusy(false);
+    }
+  }
+
+  async function handleSaveEncounterInitiative(participantId: string, rawRoll: number) {
+    if (!campaign || !selectedEncounter || isUpdatingCombat) return;
+    setIsUpdatingCombat(true);
+    setActionError(null);
+    try {
+      const updatedCampaign = await saveCampaignEncounterInitiative(
+        campaign.id,
+        selectedEncounter.id,
+        participantId,
+        rawRoll,
+      );
+      setCampaign(updatedCampaign);
+      setSelectedEncounter(
+        updatedCampaign.encounters?.find((item) => item.id === selectedEncounter.id) ?? null,
+      );
+      setInitiativeRollInputs((current) => ({ ...current, [participantId]: '' }));
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Initiative result could not be saved.',
+      );
+    } finally {
+      setIsUpdatingCombat(false);
+    }
+  }
+
+  async function handleResetEncounterInitiative(participantId: string) {
+    if (!campaign || !selectedEncounter || isUpdatingCombat) return;
+    setIsUpdatingCombat(true);
+    setActionError(null);
+    try {
+      const updatedCampaign = await resetCampaignEncounterInitiative(
+        campaign.id,
+        selectedEncounter.id,
+        participantId,
+      );
+      setCampaign(updatedCampaign);
+      setSelectedEncounter(
+        updatedCampaign.encounters?.find((item) => item.id === selectedEncounter.id) ?? null,
+      );
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Initiative result could not be reset.',
+      );
+    } finally {
+      setIsUpdatingCombat(false);
+    }
+  }
+
+  function renderInitiativeSubmission(
+    participantId: string,
+    name: string,
+    initiativeBonus: number,
+  ) {
+    const result = selectedEncounter?.initiativeResults?.[participantId];
+    if (result) {
+      return (
+        <View style={styles.initiativeSubmission}>
+          <Text
+            style={[
+              styles.initiativeSubmissionResult,
+              result.bonus !== initiativeBonus && styles.initiativeSubmissionStale,
+            ]}
+          >
+            {result.bonus === initiativeBonus
+              ? `${result.rawRoll} ${result.bonus >= 0 ? '+' : '−'} ${Math.abs(result.bonus)} = ${result.total} · Ready`
+              : 'Initiative bonus changed · reset and reroll'}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Reset ${name} initiative`}
+            disabled={isUpdatingCombat}
+            onPress={() => void handleResetEncounterInitiative(participantId)}
+            style={styles.initiativeResetButton}
+          >
+            <Text style={styles.initiativeResetText}>Reset</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    const input = initiativeRollInputs[participantId] ?? '';
+    const parsedRoll = /^\d+$/.test(input) ? Number(input) : Number.NaN;
+    return (
+      <View style={styles.initiativeSubmissionBlock}>
+        <Text style={styles.initiativeRollHint}>
+          Your d20 result — do not add your bonus.
+        </Text>
+        <View style={styles.initiativeSubmission}>
+          <TextInput
+            accessibilityLabel="Your d20 result — do not add your bonus"
+            keyboardType="number-pad"
+            maxLength={2}
+            onChangeText={(value) =>
+              setInitiativeRollInputs((current) => ({ ...current, [participantId]: value }))
+            }
+            placeholder="d20"
+            placeholderTextColor="#8D806B"
+            style={styles.initiativeRollInput}
+            value={input}
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Roll initiative for ${name}`}
+            disabled={isUpdatingCombat}
+            onPress={() => void handleSaveEncounterInitiative(
+              participantId,
+              Math.floor(Math.random() * 20) + 1,
+            )}
+            style={styles.initiativeRollButton}
+          >
+            <Text style={styles.initiativeRollButtonText}>Roll d20</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={
+              isUpdatingCombat ||
+              !Number.isInteger(parsedRoll) ||
+              parsedRoll < 1 ||
+              parsedRoll > 20
+            }
+            onPress={() => void handleSaveEncounterInitiative(participantId, parsedRoll)}
+            style={[
+              styles.initiativeRollButton,
+              (isUpdatingCombat ||
+                !Number.isInteger(parsedRoll) ||
+                parsedRoll < 1 ||
+                parsedRoll > 20) &&
+                styles.initiativeSubmissionDisabled,
+            ]}
+          >
+            <Text style={styles.initiativeRollButtonText}>Enter Roll</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
   const characters = campaign?.characters ?? [];
   const activeCharacters = characters.filter((character) => (character.status ?? 'active') === 'active');
   const storedCharacters = characters.filter((character) => character.status === 'stored');
   const deadCharacters = characters.filter((character) => character.status === 'dead');
-  const initiativeOrder = getInitiativeOrder(activeCharacters);
+  const matchingEnemyPresets = ENEMY_PRESETS.filter((preset) =>
+    preset.name.toLowerCase().includes(enemySearch.trim().toLowerCase()),
+  );
+  const matchingCustomEnemyPresets = (campaign?.customEnemyPresets ?? []).filter((preset) =>
+    preset.name.toLowerCase().includes(enemySearch.trim().toLowerCase()),
+  );
+  const unrolledNonPlayerParticipants = selectedEncounter
+    ? [
+        ...(selectedEncounter.allies ?? []).map((ally) => ({
+          id: getCampaignInitiativeKey('ally', ally.id),
+          name: ally.name,
+        })),
+        ...selectedEncounter.enemies.flatMap((enemy) => {
+          const quantity = enemy.quantity ?? 1;
+          return enemy.initiativeMode === 'horde' && quantity > 1
+            ? [{
+                id: getCampaignInitiativeKey('enemy', enemy.id, undefined, true),
+                name: `${enemy.name} Horde`,
+              }]
+            : Array.from({ length: quantity }, (_, index) => ({
+                id: getCampaignInitiativeKey('enemy', enemy.id, index),
+                name: quantity === 1 ? enemy.name : `${enemy.name} ${index + 1}`,
+              }));
+        }),
+      ].filter((participant) => !selectedEncounter.initiativeResults?.[participant.id])
+    : [];
+  const missingInitiativeNames = selectedEncounter
+    ? [
+        ...activeCharacters
+          .filter(
+            (character) => {
+              const result = selectedEncounter.initiativeResults?.[
+                getCampaignInitiativeKey('character', character.id)
+              ];
+              return !result || result.bonus !== character.initiative;
+            },
+          )
+          .map((character) => character.name),
+        ...(selectedEncounter.allies ?? [])
+          .filter(
+            (ally) => {
+              const result = selectedEncounter.initiativeResults?.[
+                getCampaignInitiativeKey('ally', ally.id)
+              ];
+              return !result || result.bonus !== ally.initiative;
+            },
+          )
+          .map((ally) => ally.name),
+        ...selectedEncounter.enemies.flatMap((enemy) => {
+          const quantity = enemy.quantity ?? 1;
+          if (enemy.initiativeMode === 'horde' && quantity > 1) {
+            const result = selectedEncounter.initiativeResults?.[
+              getCampaignInitiativeKey('enemy', enemy.id, undefined, true)
+            ];
+            return result?.bonus === enemy.initiative ? [] : [`${enemy.name} horde`];
+          }
+          return Array.from({ length: quantity }, (_, index) =>
+            selectedEncounter.initiativeResults?.[
+              getCampaignInitiativeKey('enemy', enemy.id, index)
+            ]?.bonus === enemy.initiative
+              ? null
+              : quantity === 1
+                ? enemy.name
+                : `${enemy.name} ${index + 1}`,
+          ).filter((name): name is string => name !== null);
+        }),
+      ]
+    : [];
+  const combatParticipantIds = campaign?.combat?.participantIds
+    ? new Set(campaign.combat.participantIds)
+    : null;
+  const combatCharacterResults = new Map(
+    (campaign?.combat?.characters ?? []).map((character) => [character.id, character]),
+  );
+  const initiativeOrder: InitiativeEntry[] = campaign?.combat
+    ? [
+        ...activeCharacters
+          .filter((character) => !combatParticipantIds || combatParticipantIds.has(character.id))
+          .map((character) => {
+            const result = combatCharacterResults.get(character.id);
+            return {
+              id: character.id,
+              name: character.name,
+              initiative: result?.initiativeTotal ?? character.initiative,
+              initiativeRoll: result?.initiativeRoll,
+              initiativeBonus: result?.initiativeBonus,
+              initiativeTotal: result?.initiativeTotal,
+              className: character.className,
+              race: character.race,
+              portraitUri: character.portraitUri,
+              portraitPresetId: character.portraitPresetId,
+            };
+          }),
+        ...(campaign.combat.allies ?? []).map((ally) => ({
+          id: ally.id,
+          name: ally.name,
+          initiative: ally.initiative,
+          initiativeRoll: ally.initiativeRoll,
+          initiativeBonus: ally.initiativeBonus,
+          initiativeTotal: ally.initiativeTotal,
+          className: ally.className,
+          race: ally.race,
+          portraitUri: ally.portraitUri,
+          portraitPresetId: ally.portraitPresetId,
+          maxHp: ally.maxHp,
+          currentHp: ally.currentHp,
+        })),
+        ...(campaign.combat.enemies ?? []),
+      ].sort((left, right) => right.initiative - left.initiative)
+    : getInitiativeOrder(activeCharacters);
   const currentCharacter = initiativeOrder.find(
     (character) => character.id === campaign?.combat?.currentCharacterId,
   );
+  async function handleRollUnrolledEnemies() {
+    if (!campaign || !selectedEncounter || isUpdatingCombat || unrolledNonPlayerParticipants.length === 0) {
+      return;
+    }
+    setIsUpdatingCombat(true);
+    setActionError(null);
+    try {
+      let updatedCampaign = campaign;
+      for (const participant of unrolledNonPlayerParticipants) {
+        const latestEncounter = updatedCampaign.encounters?.find(
+          (item) => item.id === selectedEncounter.id,
+        );
+        if (latestEncounter?.initiativeResults?.[participant.id]) continue;
+        updatedCampaign = await saveCampaignEncounterInitiative(
+          campaign.id,
+          selectedEncounter.id,
+          participant.id,
+          Math.floor(Math.random() * 20) + 1,
+        );
+        setCampaign(updatedCampaign);
+        setSelectedEncounter(
+          updatedCampaign.encounters?.find((item) => item.id === selectedEncounter.id) ?? null,
+        );
+      }
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Unrolled enemies could not be rolled.',
+      );
+    } finally {
+      setIsUpdatingCombat(false);
+    }
+  }
   const coverSource = campaign
     ? getCampaignCoverSource(campaign.coverId, campaign.coverUri)
     : null;
   const renderCharacterCard = (character: CampaignCharacter) => (
     <View key={character.id} style={styles.characterCard}>
       <View style={styles.characterPortrait}>
-        {character.portraitUri ? (
+        {getCharacterPortraitSource(character.portraitPresetId, character.portraitUri) ? (
           <Image
             accessibilityLabel={`${character.name} portrait`}
             resizeMode="cover"
-            source={{ uri: character.portraitUri }}
+            source={getCharacterPortraitSource(character.portraitPresetId, character.portraitUri)}
             style={styles.characterPortraitImage}
           />
         ) : (
@@ -307,7 +1477,7 @@ export default function CampaignDetailScreen() {
           {character.name}
         </Text>
         <Text numberOfLines={1} style={styles.characterClass}>
-          {character.className}
+          {character.race ? `${character.race} · ${character.className}` : character.className}
         </Text>
         <View style={styles.characterDivider} />
         <Text style={styles.characterStats}>
@@ -398,34 +1568,38 @@ export default function CampaignDetailScreen() {
                   </Text>
                 </ImageBackground>
 
-                <View style={styles.combatBanner}>
-                  <View style={styles.combatBannerLabel}>
-                    <Text style={styles.combatIcon}>⚔</Text>
-                    <Text style={styles.combatBannerText}>
-                      {campaign.combat ? 'Combat in progress' : 'Ready for combat'}
-                    </Text>
+                {activeTab !== 'Encounters' && (
+                  <View style={styles.combatBanner}>
+                    <View style={styles.combatBannerLabel}>
+                      <Text style={styles.combatIcon}>⚔</Text>
+                      <Text style={styles.combatBannerText}>
+                        {campaign.combat ? 'Combat in progress' : 'Ready for combat'}
+                      </Text>
+                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isUpdatingCombat}
+                      onPress={() => {
+                        if (campaign.combat) {
+                          setIsCombatModalVisible(true);
+                        } else {
+                          setActiveTab('Encounters');
+                          openEncounterEditor();
+                          setEncounterName('Quick Combat');
+                        }
+                      }}
+                      style={styles.combatAction}
+                    >
+                      <Text style={styles.combatActionText}>
+                        {isUpdatingCombat
+                          ? 'Please wait...'
+                          : campaign.combat
+                            ? 'Resume Combat  ›'
+                            : 'Prepare Combat  ›'}
+                      </Text>
+                    </Pressable>
                   </View>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={isUpdatingCombat}
-                    onPress={() => {
-                      if (campaign.combat) {
-                        setIsCombatModalVisible(true);
-                      } else {
-                        void handleStartCombat();
-                      }
-                    }}
-                    style={styles.combatAction}
-                  >
-                    <Text style={styles.combatActionText}>
-                      {isUpdatingCombat
-                        ? 'Please wait...'
-                        : campaign.combat
-                          ? 'Resume Combat  ›'
-                          : 'Start Combat  ›'}
-                    </Text>
-                  </Pressable>
-                </View>
+                )}
                 {actionError && <Text style={styles.errorText}>{actionError}</Text>}
 
                 <View accessibilityRole="tablist" style={styles.tabs}>
@@ -452,7 +1626,11 @@ export default function CampaignDetailScreen() {
                         accessibilityRole="button"
                         onPress={() => {
                           setActionError(null);
+                          setCharacterName('');
+                          setCharacterRace('');
+                          setCharacterClass('');
                           setCharacterPortraitUri(null);
+                          setCharacterPortraitPresetId(null);
                           setIsCharacterModalVisible(true);
                         }}
                         style={styles.addCharacterButton}
@@ -485,8 +1663,274 @@ export default function CampaignDetailScreen() {
                       </>
                     )}
                   </>
+                ) : activeTab === 'Encounters' ? (
+                  <View style={styles.encountersSection}>
+                    <View style={styles.encountersHeading}>
+                      <View style={styles.encountersHeaderRow}>
+                        <View style={styles.encountersTitleGroup}>
+                          <Text style={styles.encountersTitle}>Encounters</Text>
+                          <Text style={styles.encountersDescription}>
+                            Prepare fights for your next session
+                          </Text>
+                        </View>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => router.push('/lobby')}
+                          style={styles.joinLobbyButton}
+                        >
+                          <Text style={styles.joinLobbyButtonText}>Join Lobby</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Prepare a new combat encounter"
+                      onPress={() => openEncounterEditor()}
+                      style={({ pressed }) => [
+                        styles.prepareCombatButton,
+                        pressed && styles.prepareCombatButtonPressed,
+                      ]}
+                    >
+                      <View pointerEvents="none" style={styles.prepareCombatInnerFrame} />
+                      <Text accessibilityElementsHidden style={styles.prepareCombatLeftOrnament}>
+                        ✦
+                      </Text>
+                      <View style={styles.prepareCombatContent}>
+                        <Text accessibilityElementsHidden style={styles.prepareCombatIcon}>＋</Text>
+                        <Text style={styles.prepareCombatText}>Prepare Combat</Text>
+                      </View>
+                      <Text accessibilityElementsHidden style={styles.prepareCombatRightOrnament}>
+                        ✧
+                      </Text>
+                    </Pressable>
+                    {(campaign.encounters ?? []).length === 0 ? (
+                      <View style={styles.emptyEncountersPanel}>
+                        <Text style={styles.emptyTitle}>No encounters prepared</Text>
+                        <Text style={styles.emptyDescription}>
+                          Create an encounter to plan enemies and prepare combat.
+                        </Text>
+                      </View>
+                    ) : (
+                      (campaign.encounters ?? []).map((encounter, index) => {
+                        const isInProgress =
+                          Boolean(campaign.combat) &&
+                          campaign.combat?.encounterId === encounter.id;
+                        const status = isInProgress ? 'in-progress' : encounter.status;
+                        const enemyCount = encounter.enemies.reduce(
+                          (total, enemy) => total + (enemy.quantity ?? 1),
+                          0,
+                        );
+                        const allyCount = encounter.allies?.length ?? 0;
+                        const canOpenLobby =
+                          status === 'ready' &&
+                          !campaign.combat &&
+                          (encounter.enemies.length > 0 || allyCount > 0);
+                        return (
+                          <View key={encounter.id} style={styles.encounterCard}>
+                            <Image
+                              accessibilityLabel={`${encounter.name} encounter artwork`}
+                              resizeMode="cover"
+                              source={ENCOUNTER_ARTWORK[index % ENCOUNTER_ARTWORK.length]}
+                              style={styles.encounterArtwork}
+                            />
+                            <View style={styles.encounterDetails}>
+                              <View style={styles.encounterCardHeading}>
+                                <Text numberOfLines={1} style={styles.encounterName}>
+                                  {encounter.name}
+                                </Text>
+                                <View
+                                  style={[
+                                    styles.encounterStatusBadge,
+                                    status === 'ready'
+                                      ? styles.readyStatusBadge
+                                      : status === 'in-progress'
+                                        ? styles.progressStatusBadge
+                                        : styles.draftStatusBadge,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.encounterStatusText,
+                                      status === 'ready'
+                                        ? styles.readyStatusText
+                                        : status === 'in-progress'
+                                          ? styles.progressStatusText
+                                          : styles.draftStatusText,
+                                    ]}
+                                  >
+                                    {status === 'ready'
+                                      ? '◇  Ready'
+                                      : status === 'in-progress'
+                                        ? '⌛  In progress'
+                                        : '○  Draft'}
+                                  </Text>
+                                </View>
+                              </View>
+                              <Text numberOfLines={1} style={styles.encounterSummary}>
+                                {status === 'draft'
+                                  ? `${enemyCount} enemies · ${allyCount} allies`
+                                  : `${activeCharacters.length} party · ${allyCount} allies · ${enemyCount} enemies`}
+                              </Text>
+                              {status !== 'in-progress' ? (
+                                <View style={styles.encounterActions}>
+                                  <Pressable
+                                    accessibilityRole="button"
+                                    onPress={() => openEncounterEditor(encounter)}
+                                    style={styles.encounterEditButton}
+                                  >
+                                    <Text style={styles.encounterEditIcon}>✎</Text>
+                                    <Text style={styles.encounterActionText}>Edit</Text>
+                                  </Pressable>
+                                  <Pressable
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`Delete ${encounter.name} combat`}
+                                    onPress={() => {
+                                      setActionError(null);
+                                      setSelectedEncounter(encounter);
+                                      setIsDeleteEncounterConfirmVisible(true);
+                                    }}
+                                    style={styles.encounterDeleteButton}
+                                  >
+                                    <Text style={styles.encounterDeleteText}>Delete</Text>
+                                  </Pressable>
+                                  <Pressable
+                                    accessibilityRole="button"
+                                    disabled={!canOpenLobby}
+                                    onPress={() => {
+                                      setActionError(null);
+                                      setSelectedEncounter(encounter);
+                                      setIsEncounterLobbyVisible(true);
+                                    }}
+                                    style={[
+                                      styles.encounterLobbyButton,
+                                      !canOpenLobby && styles.encounterDisabledButton,
+                                    ]}
+                                  >
+                                    <Text style={styles.encounterLobbyIcon}>♟</Text>
+                                    <Text
+                                      style={[
+                                        styles.encounterActionText,
+                                        !canOpenLobby && styles.encounterDisabledText,
+                                      ]}
+                                    >
+                                      Open Lobby
+                                    </Text>
+                                  </Pressable>
+                                </View>
+                              ) : (
+                                <Pressable
+                                  accessibilityRole="button"
+                                  onPress={() => setIsCombatModalVisible(true)}
+                                  style={styles.encounterResumeButton}
+                                >
+                                  <Text style={styles.encounterResumeIcon}>▶</Text>
+                                  <Text style={styles.encounterResumeText}>Resume Combat</Text>
+                                </Pressable>
+                              )}
+                            </View>
+                          </View>
+                        );
+                      })
+                    )}
+                  </View>
                 ) : activeTab === 'Graveyard' && deadCharacters.length > 0 ? (
-                  deadCharacters.map(renderCharacterCard)
+                  <View style={styles.graveyardSection}>
+                    <View style={styles.graveyardHeading}>
+                      <Text style={styles.graveyardTitle}>Fallen Heroes</Text>
+                      <View style={styles.graveyardOrnament}>
+                        <View style={styles.graveyardRule} />
+                        <Text style={styles.graveyardStar}>✧</Text>
+                        <View style={styles.graveyardRule} />
+                      </View>
+                      <Text style={styles.graveyardDescription}>
+                        Their stories remain part of this campaign.
+                      </Text>
+                    </View>
+                    {deadCharacters.map((character) => (
+                      <View key={character.id} style={styles.graveyardCard}>
+                        <View style={styles.graveyardPortrait}>
+                          {getCharacterPortraitSource(character.portraitPresetId, character.portraitUri) ? (
+                            <Image
+                              accessibilityLabel={`${character.name} portrait`}
+                              resizeMode="cover"
+                              source={getCharacterPortraitSource(
+                                character.portraitPresetId,
+                                character.portraitUri,
+                              )}
+                              style={styles.graveyardPortraitImage}
+                            />
+                          ) : (
+                            <Text style={styles.characterInitial}>
+                              {character.name.charAt(0).toUpperCase()}
+                            </Text>
+                          )}
+                        </View>
+                        <View style={styles.graveyardCharacterInfo}>
+                          <View style={styles.graveyardCharacterHeading}>
+                            <Text numberOfLines={1} style={styles.characterName}>
+                              {character.name}
+                            </Text>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Character options for ${character.name}`}
+                              disabled={isUpdatingCharacter}
+                              hitSlop={8}
+                              onPress={() => {
+                                setActionError(null);
+                                setSelectedCharacter(character);
+                                setEditedInitiative(character.initiative);
+                                setIsEditingInitiative(false);
+                                setIsCharacterDeleteConfirmVisible(false);
+                                setIsCharacterMenuVisible(true);
+                              }}
+                              style={styles.graveyardMenuButton}
+                            >
+                              <Text accessibilityElementsHidden style={styles.characterMenuDots}>
+                                ⋯
+                              </Text>
+                            </Pressable>
+                          </View>
+                          <Text numberOfLines={1} style={styles.characterClass}>
+                            {character.race
+                              ? `${character.race} · ${character.className}`
+                              : character.className}
+                          </Text>
+                          <View style={styles.characterDivider} />
+                          <View style={styles.graveyardActionRow}>
+                            <Pressable
+                              accessibilityRole="button"
+                              disabled={isUpdatingCharacter}
+                              onPress={() => void handleSetCharacterStatus('active', character)}
+                              style={[
+                                styles.restoreCharacterButton,
+                                isUpdatingCharacter && styles.disabledSaveButton,
+                              ]}
+                            >
+                              <Text numberOfLines={1} style={styles.restoreCharacterText}>
+                                {isUpdatingCharacter ? 'Restoring...' : 'Restore to Party'}
+                              </Text>
+                            </Pressable>
+                            <Image
+                              accessible={false}
+                              resizeMode="contain"
+                              source={require('../../../assets/images/memorial-candle.png')}
+                              style={styles.memorialCandle}
+                            />
+                          </View>
+                        </View>
+                      </View>
+                    ))}
+                    <View style={styles.graveyardFooter}>
+                      <View style={styles.graveyardOrnament}>
+                        <View style={styles.graveyardRule} />
+                        <Text style={styles.graveyardStar}>✧</Text>
+                        <View style={styles.graveyardRule} />
+                      </View>
+                      <Text style={styles.graveyardFooterText}>
+                        Move characters here from the Party menu.
+                      </Text>
+                    </View>
+                  </View>
                 ) : activeTab === 'History' && (campaign.combatHistory?.length ?? 0) > 0 ? (
                   [...(campaign.combatHistory ?? [])]
                     .reverse()
@@ -512,11 +1956,9 @@ export default function CampaignDetailScreen() {
                       {activeTab === 'Graveyard' ? 'The Graveyard is empty' : activeTab}
                     </Text>
                     <Text style={styles.emptyDescription}>
-                      {activeTab === 'Encounters'
-                        ? 'Encounters for this campaign will appear here.'
-                        : activeTab === 'Graveyard'
-                          ? 'Fallen characters will be remembered here.'
-                          : 'Completed combat records will appear here.'}
+                      {activeTab === 'Graveyard'
+                        ? 'Fallen characters will be remembered here.'
+                        : 'Completed combat records will appear here.'}
                     </Text>
                   </View>
                 )}
@@ -543,6 +1985,10 @@ export default function CampaignDetailScreen() {
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Add Character</Text>
               <Text style={styles.modalDescription}>Add a hero to this campaign&apos;s party.</Text>
+              <CharacterPresetPicker
+                onSelect={chooseCharacterPreset}
+                selectedPresetId={characterPortraitPresetId}
+              />
               <TextInput
                 accessibilityLabel="Character name"
                 autoCapitalize="words"
@@ -553,6 +1999,17 @@ export default function CampaignDetailScreen() {
                 returnKeyType="next"
                 style={styles.modalInput}
                 value={characterName}
+              />
+              <TextInput
+                accessibilityLabel="Character race"
+                autoCapitalize="words"
+                autoCorrect={false}
+                maxLength={30}
+                onChangeText={setCharacterRace}
+                placeholder="Race (optional)"
+                placeholderTextColor="#8D806B"
+                style={styles.modalInput}
+                value={characterRace}
               />
               <Text style={styles.fieldLabel}>Class</Text>
               <View style={styles.classOptions}>
@@ -587,23 +2044,29 @@ export default function CampaignDetailScreen() {
                 <Text style={styles.portraitPickerText}>
                   {isPickingPortrait
                     ? 'Opening Photos...'
-                    : characterPortraitUri
+                    : characterPortraitUri || characterPortraitPresetId
                       ? 'Change Character Image'
                       : 'Add Character Image'}
                 </Text>
               </Pressable>
-              {characterPortraitUri && (
+              {(characterPortraitUri || characterPortraitPresetId) && (
                 <View style={styles.portraitPreviewRow}>
                   <Image
                     accessibilityLabel="Character portrait preview"
                     resizeMode="cover"
-                    source={{ uri: characterPortraitUri }}
+                    source={getCharacterPortraitSource(
+                      characterPortraitPresetId ?? undefined,
+                      characterPortraitUri,
+                    )}
                     style={styles.portraitPreview}
                   />
                   <Pressable
                     accessibilityRole="button"
                     disabled={isSavingCharacter || isPickingPortrait}
-                    onPress={() => setCharacterPortraitUri(null)}
+                    onPress={() => {
+                      setCharacterPortraitUri(null);
+                      setCharacterPortraitPresetId(null);
+                    }}
                     style={styles.removePortraitButton}
                   >
                     <Text style={styles.removePortraitText}>Remove image</Text>
@@ -676,6 +2139,1019 @@ export default function CampaignDetailScreen() {
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setIsEncounterEditorVisible(false)}
+        backdropColor="#030A12"
+        visible={isEncounterEditorVisible}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.encounterEditorScreen}
+        >
+          <View style={styles.encounterEditorHeader}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back to encounters"
+              hitSlop={8}
+              onPress={() => setIsEncounterEditorVisible(false)}
+              style={styles.encounterBackButton}
+            >
+              <Text style={styles.encounterBackArrow}>‹</Text>
+            </Pressable>
+            <View style={styles.encounterEditorTitleBlock}>
+              <Text style={styles.encounterEditorTitle}>
+                {editingEncounterId ? 'Edit Encounter' : 'Prepare Combat'}
+              </Text>
+              <Text numberOfLines={1} style={styles.encounterEditorCampaignName}>
+                {campaign?.name.toUpperCase()}
+              </Text>
+            </View>
+            <View style={styles.encounterHeaderSpacer} />
+          </View>
+          <ScrollView
+            contentContainerStyle={styles.encounterEditorContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.encounterFieldLabel}>Encounter name</Text>
+            <TextInput
+              accessibilityLabel="Encounter name"
+              autoCapitalize="sentences"
+              maxLength={60}
+              onChangeText={setEncounterName}
+              placeholder="Name this encounter"
+              placeholderTextColor="#8D806B"
+              style={styles.encounterNameInput}
+              value={encounterName}
+            />
+
+            <View style={styles.encounterPartyHeading}>
+              <Text style={styles.encounterSectionTitle}>Party</Text>
+              <Text style={styles.encounterSectionCount}>
+                · {activeCharacters.length} {activeCharacters.length === 1 ? 'character' : 'characters'}
+              </Text>
+            </View>
+            {activeCharacters.length > 0 ? (
+              <ScrollView
+                horizontal
+                contentContainerStyle={styles.encounterPartyList}
+                showsHorizontalScrollIndicator={false}
+              >
+                {activeCharacters.map((character) => (
+                  <View key={character.id} style={styles.encounterPartyMember}>
+                    <View style={styles.encounterPartyPortrait}>
+                      {getCharacterPortraitSource(character.portraitPresetId, character.portraitUri) ? (
+                        <Image
+                          accessibilityLabel={`${character.name} portrait`}
+                          resizeMode="cover"
+                          source={getCharacterPortraitSource(
+                            character.portraitPresetId,
+                            character.portraitUri,
+                          )}
+                          style={styles.encounterPartyPortraitImage}
+                        />
+                      ) : (
+                        <Text style={styles.encounterPartyInitial}>
+                          {character.name.charAt(0).toUpperCase()}
+                        </Text>
+                      )}
+                    </View>
+                    <Text numberOfLines={1} style={styles.encounterPartyName}>
+                      {character.name}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.encounterPartyClass}>
+                      {character.className}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <Text style={styles.encounterPartyEmpty}>
+                Add or restore a party member before opening this encounter&apos;s lobby.
+              </Text>
+            )}
+
+            <View style={styles.encounterAllyHeading}>
+              <View style={styles.encounterEnemiesTitleGroup}>
+                <Text style={styles.encounterAllyIcon}>♟</Text>
+                <Text style={styles.encounterSectionTitle}>Temporary Allies</Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={openCombatAllyForm}
+                style={styles.addEnemyButton}
+              >
+                <Text style={styles.addEnemyPlus}>＋</Text>
+                <Text style={styles.addEnemyButtonText}>Add Ally</Text>
+              </Pressable>
+            </View>
+            {encounterAllies.length > 0 ? (
+              encounterAllies.map((ally) => (
+                <View key={ally.id} style={styles.encounterEnemyRow}>
+                  {getCharacterPortraitSource(ally.portraitPresetId, ally.portraitUri) ? (
+                    <Image
+                      accessibilityLabel={`${ally.name} portrait`}
+                      resizeMode="cover"
+                      source={getCharacterPortraitSource(
+                        ally.portraitPresetId,
+                        ally.portraitUri,
+                      )}
+                      style={styles.encounterEnemyPortrait}
+                    />
+                  ) : (
+                    <View style={styles.encounterAllyPortraitFallback}>
+                      <Text style={styles.encounterPartyInitial}>
+                        {ally.name.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={styles.encounterEnemyInfo}>
+                    <Text numberOfLines={1} style={styles.encounterEnemyName}>
+                      {ally.name}
+                    </Text>
+                    <View style={styles.encounterEnemyMeta}>
+                      <Text style={styles.encounterEnemyInitiative}>
+                        {ally.race ? `${ally.race} · ` : ''}
+                        {ally.className}
+                      </Text>
+                      <Text style={styles.encounterEnemyModeBadge}>
+                        Initiative {ally.initiative >= 0 ? '+' : ''}
+                        {ally.initiative}
+                      </Text>
+                      <Text style={styles.encounterEnemyModeBadge}>
+                        HP {ally.maxHp ?? 10}
+                      </Text>
+                    </View>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${ally.name} from this encounter`}
+                    onPress={() =>
+                      setEncounterAllies((current) =>
+                        current.filter((item) => item.id !== ally.id),
+                      )
+                    }
+                    style={styles.enemyRowIconButton}
+                  >
+                    <Text style={styles.enemyRowRemoveIcon}>×</Text>
+                  </Pressable>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.encounterPartyEmpty}>
+                Add temporary allies to this encounter without saving them to the Party tab.
+              </Text>
+            )}
+
+            <View style={styles.encounterDivider} />
+            <View style={styles.encounterEnemiesHeading}>
+              <View style={styles.encounterEnemiesTitleGroup}>
+                <Text style={styles.encounterSkull}>☠</Text>
+                <Text style={styles.encounterSectionTitle}>Enemies</Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => openEnemyPicker()}
+                style={styles.addEnemyButton}
+              >
+                <Text style={styles.addEnemyPlus}>＋</Text>
+                <Text style={styles.addEnemyButtonText}>Add Enemy</Text>
+              </Pressable>
+            </View>
+            {encounterEnemies.length > 0 ? (
+              encounterEnemies.flatMap((enemy, index) => {
+                const isIndividualGroup =
+                  enemy.initiativeMode === 'individual' && enemy.quantity > 1;
+                const visibleCount = isIndividualGroup ? enemy.quantity : 1;
+                return Array.from({ length: visibleCount }, (_, instanceIndex) => {
+                  const displayName = isIndividualGroup
+                    ? `${enemy.name} ${instanceIndex + 1}`
+                    : enemy.name;
+                  return (
+                <View
+                  key={`${enemy.imageId}-${index}-${instanceIndex}`}
+                  style={styles.encounterEnemyRow}
+                >
+                  <Image
+                    accessibilityLabel={`${displayName} preset image`}
+                    resizeMode="cover"
+                    source={getEnemyImage(enemy.imageId, campaign?.customEnemyPresets)}
+                    style={styles.encounterEnemyPortrait}
+                  />
+                  <View style={styles.encounterEnemyInfo}>
+                    <Text numberOfLines={1} style={styles.encounterEnemyName}>
+                      {displayName}
+                    </Text>
+                    <View style={styles.encounterEnemyMeta}>
+                      <Text style={styles.encounterEnemyInitiative}>
+                        Initiative bonus {enemy.initiative >= 0 ? '+' : ''}
+                        {enemy.initiative}
+                      </Text>
+                      <Text style={styles.encounterEnemyModeBadge}>
+                        {enemy.maxHp ?? 10} HP each
+                      </Text>
+                      <Text style={styles.encounterEnemyModeBadge}>
+                        {isIndividualGroup
+                          ? `Individual · ${instanceIndex + 1}/${enemy.quantity}`
+                          : enemy.initiativeMode === 'horde' && enemy.quantity > 1
+                          ? `${enemy.quantity} enemies · 1 initiative`
+                          : `${enemy.quantity} ${enemy.quantity === 1 ? 'enemy' : 'enemies'}`}
+                      </Text>
+                    </View>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Edit ${displayName}`}
+                    onPress={() => openEnemyPicker(enemy, index)}
+                    style={styles.enemyRowIconButton}
+                  >
+                    <Text style={styles.enemyRowEditIcon}>✎</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove ${displayName}`}
+                    onPress={() =>
+                      setEncounterEnemies((current) => {
+                        if (!isIndividualGroup) {
+                          return current.filter((_, enemyIndex) => enemyIndex !== index);
+                        }
+                        return current.flatMap((item, enemyIndex) => {
+                          if (enemyIndex !== index) return [item];
+                          const quantity = item.quantity - 1;
+                          return quantity > 0 ? [{ ...item, quantity }] : [];
+                        });
+                      })
+                    }
+                    style={styles.enemyRowIconButton}
+                  >
+                    <Text style={styles.enemyRowRemoveIcon}>×</Text>
+                  </Pressable>
+                </View>
+                  );
+                });
+              })
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => openEnemyPicker()}
+                style={styles.encounterEmptyEnemies}
+              >
+                <Text style={styles.encounterEmptyEnemiesTitle}>No enemies added yet</Text>
+                <Text style={styles.encounterEmptyEnemiesText}>
+                  Choose a preset image and set the enemy count and initiative.
+                </Text>
+              </Pressable>
+            )}
+            <View style={styles.encounterSummaryBar}>
+              <Text style={styles.encounterSummaryIcon}>♟</Text>
+              <Text style={styles.encounterSummaryText}>
+                {encounterEnemies.reduce((total, enemy) => total + enemy.quantity, 0)} enemies
+                {'  ·  '}
+                {encounterEnemies.reduce(
+                  (total, enemy) =>
+                    total +
+                    (enemy.initiativeMode === 'horde' && enemy.quantity > 1 ? 1 : enemy.quantity),
+                  0,
+                )}{' '}
+                enemy initiative rolls
+              </Text>
+            </View>
+            {actionError && <Text style={styles.errorText}>{actionError}</Text>}
+          </ScrollView>
+          <View style={styles.encounterEditorFooter}>
+            {editingEncounterId && (
+              <Pressable
+                accessibilityRole="button"
+                disabled={isSavingEncounter || isDeletingEncounter}
+                onPress={() => {
+                  const encounter = campaign?.encounters?.find(
+                    (item) => item.id === editingEncounterId,
+                  );
+                  if (!encounter) {
+                    setActionError('That encounter could not be found.');
+                    return;
+                  }
+                  setSelectedEncounter(encounter);
+                  setActionError(null);
+                  setIsDeleteEncounterConfirmVisible(true);
+                }}
+                style={styles.encounterEditorDeleteButton}
+              >
+                <Text style={styles.encounterEditorDeleteText}>Delete Combat</Text>
+              </Pressable>
+            )}
+            <Pressable
+              accessibilityRole="button"
+              disabled={isSavingEncounter}
+              onPress={() => void handleSaveEncounter('ready')}
+              style={styles.encounterSaveButton}
+            >
+              <Text style={styles.encounterSaveButtonText}>
+                {isSavingEncounter ? 'Saving...' : 'Save Encounter'}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={
+                isSavingEncounter ||
+                (encounterEnemies.length === 0 && encounterAllies.length === 0) ||
+                !encounterName.trim()
+              }
+              onPress={() => void handleSaveEncounterAndOpenLobby()}
+              style={[
+                styles.encounterOpenLobbyButton,
+                (isSavingEncounter ||
+                  (encounterEnemies.length === 0 && encounterAllies.length === 0) ||
+                  !encounterName.trim()) &&
+                  styles.encounterOpenLobbyDisabled,
+              ]}
+            >
+              <Text style={styles.encounterOpenLobbyIcon}>⚔</Text>
+              <Text style={styles.encounterOpenLobbyText}>Open Lobby</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={isSavingEncounter}
+              onPress={() => void handleSaveEncounter('draft')}
+              style={styles.encounterSaveDraftButton}
+            >
+              <Text style={styles.encounterSaveDraftText}>Save as Draft</Text>
+            </Pressable>
+          </View>
+          {isEnemyPickerVisible && (
+            <View style={styles.enemyPickerBackdrop}>
+              <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                style={styles.enemyPickerCard}
+              >
+                <View style={styles.enemyPickerHeader}>
+                  <Text style={styles.enemyPickerTitle}>Add Enemy</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close enemy selector"
+                    onPress={() => setIsEnemyPickerVisible(false)}
+                    style={styles.enemyPickerCloseButton}
+                  >
+                    <Text style={styles.enemyPickerCloseText}>×</Text>
+                  </Pressable>
+                </View>
+                <ScrollView
+                  contentContainerStyle={styles.enemyPickerContent}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  <TextInput
+                    accessibilityLabel="Search enemy presets"
+                    autoCapitalize="none"
+                    onChangeText={setEnemySearch}
+                    placeholder="⌕   Search presets..."
+                    placeholderTextColor="#8D969C"
+                    style={styles.enemySearchInput}
+                    value={enemySearch}
+                  />
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isPickingEnemyImage || isSavingEnemyPreset}
+                    onPress={() => void handlePickCustomEnemyImage()}
+                    style={[
+                      styles.customEnemyCreateButton,
+                      (isPickingEnemyImage || isSavingEnemyPreset) &&
+                        styles.customEnemyCreateButtonDisabled,
+                    ]}
+                  >
+                    <Text style={styles.customEnemyCreateButtonText}>
+                      {isPickingEnemyImage ? 'Preparing photo…' : '＋ Create Custom Enemy · Add Photo'}
+                    </Text>
+                  </Pressable>
+                  <View style={styles.enemyPresetGrid}>
+                    {matchingCustomEnemyPresets.map((preset) => (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: enemyForm?.imageId === preset.id }}
+                        key={preset.id}
+                        onPress={() => chooseCustomEnemyPreset(preset)}
+                        style={[
+                          styles.enemyPresetCard,
+                          enemyForm?.imageId === preset.id && styles.enemyPresetCardSelected,
+                        ]}
+                      >
+                        <Image
+                          accessibilityLabel={`${preset.name} custom preset`}
+                          resizeMode="cover"
+                          source={{ uri: preset.imageUri }}
+                          style={styles.enemyPresetImage}
+                        />
+                        <Text numberOfLines={1} style={styles.enemyPresetName}>
+                          {preset.name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                    {matchingEnemyPresets.map((preset) => (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: enemyForm?.imageId === preset.id }}
+                        key={preset.id}
+                        onPress={() => chooseEnemyPreset(preset.id)}
+                        style={[
+                          styles.enemyPresetCard,
+                          enemyForm?.imageId === preset.id && styles.enemyPresetCardSelected,
+                        ]}
+                      >
+                        <Image
+                          accessibilityLabel={`${preset.name} preset`}
+                          resizeMode="cover"
+                          source={preset.source}
+                          style={styles.enemyPresetImage}
+                        />
+                        <Text numberOfLines={1} style={styles.enemyPresetName}>
+                          {preset.name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  {matchingEnemyPresets.length === 0 &&
+                    matchingCustomEnemyPresets.length === 0 && (
+                    <Text style={styles.enemySearchEmpty}>No presets match that search.</Text>
+                  )}
+                  {enemyForm && (
+                    <>
+                      {enemyForm.imageUri && (
+                        <View style={styles.customEnemyPreviewRow}>
+                          <Image
+                            accessibilityLabel={`${enemyForm.name || 'Custom enemy'} photo preview`}
+                            resizeMode="cover"
+                            source={{ uri: enemyForm.imageUri }}
+                            style={styles.customEnemyPreview}
+                          />
+                          <Text style={styles.customEnemyPreviewHint}>
+                            Custom enemy photo · resized for the encounter list
+                          </Text>
+                        </View>
+                      )}
+                      <TextInput
+                        accessibilityLabel="Enemy name"
+                        autoCapitalize="words"
+                        maxLength={40}
+                        onChangeText={(name) => setEnemyForm((current) => current && { ...current, name })}
+                        placeholder="Enemy name"
+                        placeholderTextColor="#8D969C"
+                        style={styles.enemyFormNameInput}
+                        value={enemyForm.name}
+                      />
+                      <View style={styles.enemyHpRow}>
+                        <Text style={styles.enemyFormLabel}>HP per enemy</Text>
+                        <TextInput
+                          accessibilityLabel="Enemy hit points"
+                          keyboardType="number-pad"
+                          maxLength={4}
+                          onChangeText={(maxHp) =>
+                            setEnemyForm((current) => current && { ...current, maxHp })
+                          }
+                          placeholder="10"
+                          placeholderTextColor="#8D969C"
+                          style={styles.enemyHpInput}
+                          value={enemyForm.maxHp}
+                        />
+                      </View>
+                      <View style={styles.enemyQuantityInitiativeRow}>
+                        <Text style={styles.enemyFormLabel}>Quantity</Text>
+                        <View style={styles.enemyQuantityControl}>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Decrease enemy quantity"
+                            onPress={() =>
+                              setEnemyForm((current) =>
+                                current && {
+                                  ...current,
+                                  quantity: String(Math.max(1, Number(current.quantity || 1) - 1)),
+                                },
+                              )
+                            }
+                            style={styles.enemyQuantityButton}
+                          >
+                            <Text style={styles.enemyQuantityButtonText}>−</Text>
+                          </Pressable>
+                          <TextInput
+                            accessibilityLabel="Enemy quantity"
+                            keyboardType="number-pad"
+                            onChangeText={(quantity) =>
+                              setEnemyForm((current) => current && { ...current, quantity })
+                            }
+                            style={styles.enemyQuantityInput}
+                            value={enemyForm.quantity}
+                          />
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Increase enemy quantity"
+                            onPress={() =>
+                              setEnemyForm((current) =>
+                                current && {
+                                  ...current,
+                                  quantity: String(Math.min(99, Number(current.quantity || 0) + 1)),
+                                },
+                              )
+                            }
+                            style={styles.enemyQuantityButton}
+                          >
+                            <Text style={styles.enemyQuantityButtonText}>＋</Text>
+                          </Pressable>
+                        </View>
+                        <Text style={styles.enemyFormLabel}>Initiative bonus</Text>
+                        <TextInput
+                          accessibilityLabel="Enemy initiative bonus"
+                          keyboardType="numbers-and-punctuation"
+                          onChangeText={(initiative) =>
+                            setEnemyForm((current) => current && { ...current, initiative })
+                          }
+                          placeholder="0"
+                          placeholderTextColor="#8D969C"
+                          style={styles.enemyInitiativeInput}
+                          value={enemyForm.initiative}
+                        />
+                      </View>
+                      <View style={styles.enemyModeRow}>
+                        <Text style={styles.enemyFormLabel}>Initiative mode</Text>
+                        <View style={styles.enemyModeOptions}>
+                          {(['individual', 'horde'] as const).map((mode) => (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityState={{ selected: enemyForm.initiativeMode === mode }}
+                              key={mode}
+                              onPress={() =>
+                                setEnemyForm((current) => current && { ...current, initiativeMode: mode })
+                              }
+                              style={[
+                                styles.enemyModeButton,
+                                enemyForm.initiativeMode === mode && styles.enemyModeButtonSelected,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.enemyModeButtonText,
+                                  enemyForm.initiativeMode === mode && styles.enemyModeButtonTextSelected,
+                                ]}
+                              >
+                                {mode === 'individual' ? 'Individual' : 'Horde'}
+                              </Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      </View>
+                      <Text style={styles.enemyModeDescription}>
+                        {enemyForm.initiativeMode === 'horde'
+                          ? `All ${enemyForm.quantity || '0'} enemies act on one initiative turn.`
+                          : 'Each enemy gets a separate turn in initiative.'}
+                      </Text>
+                    </>
+                  )}
+                  {enemyFormError && <Text style={styles.errorText}>{enemyFormError}</Text>}
+                </ScrollView>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!enemyForm || isPickingEnemyImage || isSavingEnemyPreset}
+                  onPress={() => void handleAddEnemyToEncounter()}
+                  style={[
+                    styles.enemyPickerAddButton,
+                    (!enemyForm || isPickingEnemyImage || isSavingEnemyPreset) &&
+                      styles.enemyPickerAddButtonDisabled,
+                  ]}
+                >
+                  <Text style={styles.enemyPickerAddButtonText}>
+                    {isSavingEnemyPreset
+                      ? 'Saving custom enemy…'
+                      : enemyForm
+                        ? `${enemyForm.imageUri ? 'Save & Add' : 'Add'} ${enemyForm.quantity} ${enemyForm.name || 'Enemy'}${Number(enemyForm.quantity) === 1 ? '' : 's'}`
+                        : 'Choose a preset'}
+                  </Text>
+                </Pressable>
+              </KeyboardAvoidingView>
+            </View>
+          )}
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsOnlineLobbyVisible(false)}
+        transparent
+        visible={isOnlineLobbyVisible && Boolean(onlineLobby)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, styles.onlineLobbyModal]}>
+            <Text style={styles.modalTitle}>{onlineLobby?.encounter_name}</Text>
+            <Text style={styles.modalDescription}>
+              {onlineLobby?.role === 'dm'
+                ? 'Share this code with players. Enemy details remain private to the DM.'
+                : 'Choose one available character. Enemy details are not shared with players.'}
+            </Text>
+            {onlineLobby?.join_code && (
+              <View style={styles.onlineJoinCodePanel}>
+                <Text style={styles.lobbySectionTitle}>PLAYER JOIN CODE</Text>
+                <Text selectable style={styles.onlineJoinCode}>
+                  {onlineLobby.join_code}
+                </Text>
+              </View>
+            )}
+            <View style={styles.onlineLobbyStateRow}>
+              <Text style={styles.onlineLobbyState}>
+                {onlineLobby?.status === 'open' ? 'Lobby open · live updates on' : 'Lobby closed'}
+              </Text>
+              <Text style={styles.onlineLobbyState}>
+                {onlineLobby?.members.length ?? 0} player
+                {(onlineLobby?.members.length ?? 0) === 1 ? '' : 's'}
+              </Text>
+            </View>
+            <ScrollView style={styles.onlineLobbyRoster}>
+              <Text style={styles.lobbySectionTitle}>PLAYERS</Text>
+              {onlineLobby?.members.map((member) => {
+                const claimedCharacter = onlineLobby.characters.find(
+                  (character) => character.character_id === member.claimed_character_id,
+                );
+                return (
+                  <View key={member.user_id} style={styles.onlineMemberRow}>
+                    <View style={styles.onlineMemberText}>
+                      <Text numberOfLines={1} style={styles.lobbyMemberName}>
+                        {member.display_name}
+                        {member.user_id === onlineIdentity?.userId ? ' · You' : ''}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.lobbyMemberClass}>
+                        {member.role === 'dm'
+                          ? 'Dungeon Master'
+                          : claimedCharacter
+                            ? `Playing ${claimedCharacter.name}`
+                            : 'No character selected'}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+              <Text style={[styles.lobbySectionTitle, styles.onlineCharactersTitle]}>
+                CHARACTERS
+              </Text>
+              {onlineLobby?.characters.map((character) => {
+                const claimant = onlineLobby.members.find(
+                  (member) => member.claimed_character_id === character.character_id,
+                );
+                const myClaim =
+                  claimant?.user_id === onlineIdentity?.userId &&
+                  onlineLobby.role === 'player';
+                const unavailable =
+                  onlineLobby.role !== 'player' ||
+                  onlineLobby.status !== 'open' ||
+                  isOnlineLobbyBusy ||
+                  Boolean(claimant && !myClaim);
+                const portrait = getCharacterPortraitSource(
+                  character.portrait_preset_id ?? undefined,
+                );
+                return (
+                  <View key={character.character_id} style={styles.onlineCharacterRow}>
+                    {portrait ? (
+                      <Image
+                        accessibilityLabel={`${character.name} portrait`}
+                        resizeMode="cover"
+                        source={portrait}
+                        style={styles.lobbyMemberPortrait}
+                      />
+                    ) : (
+                      <View style={styles.lobbyMemberInitial}>
+                        <Text style={styles.lobbyMemberInitialText}>
+                          {character.name.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={styles.onlineMemberText}>
+                      <Text numberOfLines={1} style={styles.lobbyMemberName}>
+                        {character.name}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.lobbyMemberClass}>
+                        {character.race ? `${character.race} · ` : ''}{character.class_name}
+                        {claimant ? ` · ${claimant.display_name}` : ' · Available'}
+                      </Text>
+                    </View>
+                    {onlineLobby.role === 'player' && onlineLobby.status === 'open' && (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ disabled: unavailable }}
+                        disabled={unavailable}
+                        onPress={() => void handleClaimOnlineCharacter(
+                          myClaim ? null : character.character_id,
+                        )}
+                        style={[
+                          styles.characterClaimButton,
+                          myClaim && styles.characterReleaseButton,
+                          unavailable && !myClaim && styles.disabledAction,
+                        ]}
+                      >
+                        <Text style={styles.characterClaimText}>
+                          {myClaim ? 'Release' : 'Claim'}
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
+                );
+              })}
+              {onlineLobby?.characters.length === 0 && (
+                <Text style={styles.onlineLobbyStatus}>
+                  The DM has not added any active party characters.
+                </Text>
+              )}
+            </ScrollView>
+            {onlineLobbyError && (
+              <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+                {onlineLobbyError}
+              </Text>
+            )}
+            <View style={styles.modalActions}>
+              {onlineLobby?.role === 'dm' && onlineLobby.status === 'open' ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isOnlineLobbyBusy}
+                  onPress={() => void handleCloseOnlineLobby()}
+                  style={styles.closeOnlineLobbyButton}
+                >
+                  <Text style={styles.closeOnlineLobbyText}>
+                    {isOnlineLobbyBusy ? 'Closing…' : 'Close Lobby'}
+                  </Text>
+                </Pressable>
+              ) : <View style={styles.onlineLobbyActionSpacer} />}
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setIsOnlineLobbyVisible(false)}
+                style={styles.cancelButton}
+              >
+                <Text style={styles.cancelText}>Done</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isDeletingEncounter) setIsDeleteEncounterConfirmVisible(false);
+        }}
+        transparent
+        visible={isDeleteEncounterConfirmVisible && Boolean(selectedEncounter)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.characterActionsModal}>
+            <Text style={styles.modalTitle}>Delete Combat?</Text>
+            <Text style={styles.modalDescription}>
+              Permanently delete “{selectedEncounter?.name}” and its temporary allies? Reusable enemy presets will not be deleted.
+            </Text>
+            {actionError && <Text style={styles.errorText}>{actionError}</Text>}
+            <View style={styles.modalActions}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isDeletingEncounter}
+                onPress={() => setIsDeleteEncounterConfirmVisible(false)}
+                style={styles.cancelButton}
+              >
+                <Text style={styles.cancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isDeletingEncounter}
+                onPress={() => void handleDeleteEncounter()}
+                style={styles.deleteCharacterAction}
+              >
+                <Text style={styles.deleteCharacterActionText}>
+                  {isDeletingEncounter ? 'Deleting…' : 'Delete Combat'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsEncounterLobbyVisible(false)}
+        transparent
+        visible={isEncounterLobbyVisible && Boolean(selectedEncounter)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{selectedEncounter?.name}</Text>
+            <Text style={styles.modalDescription}>
+              Review initiative before starting. This is a local lobby on this device; player claims and rolls are not shared across devices.
+            </Text>
+            <View style={styles.onlineLobbyCallout}>
+              <Text style={styles.onlineLobbyStatus}>
+                {isSupabaseConfigured()
+                  ? isOnlineIdentityLoading
+                    ? 'Connecting device identity...'
+                    : onlineIdentityError ?? 'Create a shared lobby for players on other devices.'
+                  : 'Connect Supabase using SUPABASE_SETUP.md to enable shared lobbies.'}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={!isSupabaseConfigured() || isOnlineLobbyBusy}
+                onPress={() => void handleCreateOnlineLobby()}
+                style={[
+                  styles.onlineLobbyAction,
+                  (!isSupabaseConfigured() || isOnlineLobbyBusy) && styles.disabledAction,
+                ]}
+              >
+                <Text style={styles.onlineLobbyActionText}>
+                  {isOnlineLobbyBusy ? 'Opening…' : 'Open Shared Online Lobby'}
+                </Text>
+              </Pressable>
+              {onlineLobbyError && (
+                <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+                  {onlineLobbyError}
+                </Text>
+              )}
+            </View>
+            <ScrollView style={styles.lobbyRoster}>
+              <Text style={styles.lobbySectionTitle}>
+                PARTY · {activeCharacters.length + (selectedEncounter?.allies?.length ?? 0)}
+              </Text>
+              {activeCharacters.map((character) => (
+                <View key={character.id} style={styles.lobbyInitiativeEntry}>
+                  <View style={styles.lobbyMemberRow}>
+                    {getCharacterPortraitSource(character.portraitPresetId, character.portraitUri) ? (
+                      <Image
+                        accessibilityLabel={`${character.name} portrait`}
+                        resizeMode="cover"
+                        source={getCharacterPortraitSource(
+                          character.portraitPresetId,
+                          character.portraitUri,
+                        )}
+                        style={styles.lobbyMemberPortrait}
+                      />
+                    ) : (
+                      <View style={styles.lobbyMemberInitial}>
+                        <Text style={styles.lobbyMemberInitialText}>
+                          {character.name.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={styles.lobbyMemberInfo}>
+                      <Text numberOfLines={1} style={styles.lobbyMemberName}>
+                        {character.name}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.lobbyMemberClass}>
+                        {character.className} · Bonus {character.initiative >= 0 ? '+' : ''}
+                        {character.initiative}
+                      </Text>
+                    </View>
+                  </View>
+                  {renderInitiativeSubmission(
+                    getCampaignInitiativeKey('character', character.id),
+                    character.name,
+                    character.initiative,
+                  )}
+                </View>
+              ))}
+              {selectedEncounter?.allies?.map((ally) => (
+                <View key={ally.id} style={styles.lobbyInitiativeEntry}>
+                  <View style={styles.lobbyMemberRow}>
+                    {getCharacterPortraitSource(ally.portraitPresetId, ally.portraitUri) ? (
+                      <Image
+                        accessibilityLabel={`${ally.name} portrait`}
+                        resizeMode="cover"
+                        source={getCharacterPortraitSource(
+                          ally.portraitPresetId,
+                          ally.portraitUri,
+                        )}
+                        style={styles.lobbyMemberPortrait}
+                      />
+                    ) : (
+                      <View style={styles.lobbyMemberInitial}>
+                        <Text style={styles.lobbyMemberInitialText}>
+                          {ally.name.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={styles.lobbyMemberInfo}>
+                      <Text numberOfLines={1} style={styles.lobbyMemberName}>
+                        {ally.name}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.lobbyMemberClass}>
+                        {ally.race ? `${ally.race} · ` : ''}
+                        {ally.className} · Temporary ally · Bonus {ally.initiative >= 0 ? '+' : ''}
+                        {ally.initiative}
+                      </Text>
+                    </View>
+                  </View>
+                  {renderInitiativeSubmission(
+                    getCampaignInitiativeKey('ally', ally.id),
+                    ally.name,
+                    ally.initiative,
+                  )}
+                </View>
+              ))}
+              <Text style={[styles.lobbySectionTitle, styles.lobbyEnemyHeader]}>
+                ENEMIES ·
+                {' '}
+                {selectedEncounter?.enemies.reduce(
+                  (total, enemy) => total + (enemy.quantity ?? 1),
+                  0,
+                ) ?? 0}
+              </Text>
+              {unrolledNonPlayerParticipants.length > 0 && (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isUpdatingCombat}
+                  onPress={() => void handleRollUnrolledEnemies()}
+                  style={styles.rollUnrolledButton}
+                >
+                  <Text style={styles.rollUnrolledText}>
+                    {isUpdatingCombat ? 'Rolling…' : `Roll Unrolled (${unrolledNonPlayerParticipants.length})`}
+                  </Text>
+                </Pressable>
+              )}
+              {selectedEncounter?.enemies.flatMap((enemy) => {
+                const quantity = enemy.quantity ?? 1;
+                const isHorde = enemy.initiativeMode === 'horde' && quantity > 1;
+                const count = isHorde ? 1 : quantity;
+                return Array.from({ length: count }, (_, index) => {
+                  const participantId = getCampaignInitiativeKey(
+                    'enemy',
+                    enemy.id,
+                    index,
+                    isHorde,
+                  );
+                  const name = isHorde
+                    ? `${enemy.name} Horde`
+                    : quantity === 1
+                      ? enemy.name
+                      : `${enemy.name} ${index + 1}`;
+                  return (
+                    <View key={participantId} style={styles.lobbyInitiativeEntry}>
+                      <View style={styles.lobbyMemberRow}>
+                        <Image
+                          accessibilityLabel={`${name} preset image`}
+                          resizeMode="cover"
+                          source={getEnemyImage(enemy.imageId, campaign?.customEnemyPresets)}
+                          style={styles.lobbyMemberPortrait}
+                        />
+                        <View style={styles.lobbyMemberInfo}>
+                          <Text numberOfLines={1} style={styles.lobbyMemberName}>
+                            {name}
+                          </Text>
+                          <Text numberOfLines={1} style={styles.lobbyMemberClass}>
+                            {isHorde
+                              ? `${quantity} creatures · one shared turn`
+                              : 'Enemy · Individual'}{' '}
+                            · Bonus {enemy.initiative >= 0 ? '+' : ''}
+                            {enemy.initiative}
+                          </Text>
+                        </View>
+                      </View>
+                      {renderInitiativeSubmission(participantId, name, enemy.initiative)}
+                    </View>
+                  );
+                });
+              })}
+            </ScrollView>
+            {missingInitiativeNames.length > 0 && (
+              <Text style={styles.errorText}>
+                Waiting for initiative: {missingInitiativeNames.join(', ')}.
+              </Text>
+            )}
+            {activeCharacters.length === 0 && (selectedEncounter?.allies?.length ?? 0) === 0 && (
+              <Text style={styles.errorText}>
+                Add an active party member or temporary ally before starting combat.
+              </Text>
+            )}
+            <View style={styles.modalActions}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isUpdatingCombat}
+                onPress={() => setIsEncounterLobbyVisible(false)}
+                style={styles.cancelButton}
+              >
+                <Text style={styles.cancelText}>Back</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={
+                  isUpdatingCombat ||
+                  (activeCharacters.length === 0 && (selectedEncounter?.allies?.length ?? 0) === 0) ||
+                  missingInitiativeNames.length > 0 ||
+                  Boolean(campaign?.combat)
+                }
+                onPress={() => selectedEncounter && void handleStartEncounter(selectedEncounter)}
+                style={[
+                  styles.saveButton,
+                  ((activeCharacters.length === 0 &&
+                    (selectedEncounter?.allies?.length ?? 0) === 0) ||
+                    missingInitiativeNames.length > 0 ||
+                    campaign?.combat) &&
+                    styles.encounterDisabledButton,
+                ]}
+              >
+                <Text style={styles.saveText}>
+                  {isUpdatingCombat ? 'Starting...' : 'Start Combat'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       <Modal
@@ -873,59 +3349,319 @@ export default function CampaignDetailScreen() {
 
       <Modal
         animationType="fade"
-        onRequestClose={() => setIsCombatModalVisible(false)}
+        onRequestClose={() => {
+          if (isAddingCombatAlly) setIsAddingCombatAlly(false);
+          else setIsCombatModalVisible(false);
+        }}
         transparent
-        visible={isCombatModalVisible && Boolean(campaign?.combat)}
+        visible={
+          (isCombatModalVisible && Boolean(campaign?.combat)) ||
+          (isAddingCombatAlly && isEncounterEditorVisible)
+        }
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.combatModal}>
-            <Text style={styles.modalTitle}>Combat</Text>
-            <Text style={styles.combatRound}>Round {campaign?.combat?.round ?? 1}</Text>
-            {currentCharacter && (
+            <Text style={styles.modalTitle}>{isAddingCombatAlly ? 'Add Ally' : 'Combat'}</Text>
+            {!isAddingCombatAlly && (
+              <Text style={styles.combatRound}>Round {campaign?.combat?.round ?? 1}</Text>
+            )}
+            {!isAddingCombatAlly && currentCharacter && (
               <Text style={styles.currentTurn}>
                 Current turn: {currentCharacter.name}
               </Text>
             )}
-            <ScrollView style={styles.initiativeList}>
-              {initiativeOrder.map((character, index) => (
-                <View
-                  key={character.id}
-                  style={[
-                    styles.initiativeRow,
-                    character.id === campaign?.combat?.currentCharacterId &&
-                      styles.currentInitiativeRow,
-                  ]}
+            {isAddingCombatAlly ? (
+              <ScrollView
+                contentContainerStyle={styles.combatAllyFormContent}
+                keyboardShouldPersistTaps="handled"
+                style={styles.combatAllyFormScroll}
+              >
+                <Text style={styles.modalDescription}>
+                  This ally is saved with this encounter only and won’t be added to the Party tab.
+                </Text>
+                <CharacterPresetPicker
+                  onSelect={chooseCombatAllyPreset}
+                  selectedPresetId={combatAllyPortraitPresetId}
+                />
+                <TextInput
+                  accessibilityLabel="Ally name"
+                  autoCapitalize="words"
+                  maxLength={40}
+                  onChangeText={setCombatAllyName}
+                  placeholder="Character name"
+                  placeholderTextColor="#A8987D"
+                  style={styles.modalInput}
+                  value={combatAllyName}
+                />
+                <TextInput
+                  accessibilityLabel="Ally race"
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                  maxLength={30}
+                  onChangeText={setCombatAllyRace}
+                  placeholder="Race (optional)"
+                  placeholderTextColor="#8D806B"
+                  style={styles.modalInput}
+                  value={combatAllyRace}
+                />
+                <Text style={styles.fieldLabel}>Maximum HP</Text>
+                <TextInput
+                  accessibilityLabel="Ally maximum HP"
+                  keyboardType="number-pad"
+                  maxLength={4}
+                  onChangeText={setCombatAllyMaxHp}
+                  placeholder="10"
+                  placeholderTextColor="#8D806B"
+                  style={styles.modalInput}
+                  value={combatAllyMaxHp}
+                />
+                <Text style={styles.fieldLabel}>Class</Text>
+                <View style={styles.classOptions}>
+                  {CHARACTER_CLASSES.map((className) => (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: combatAllyClass === className }}
+                      key={className}
+                      onPress={() => setCombatAllyClass(className)}
+                      style={[
+                        styles.classOption,
+                        combatAllyClass === className && styles.selectedClassOption,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.classOptionText,
+                          combatAllyClass === className && styles.selectedClassOptionText,
+                        ]}
+                      >
+                        {className}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isPickingCombatAllyPortrait || isSavingCombatAlly}
+                  onPress={() => void handlePickCombatAllyPortrait()}
+                  style={styles.portraitPickerButton}
                 >
-                  <Text style={styles.initiativeRank}>{index + 1}</Text>
-                  <Text numberOfLines={1} style={styles.initiativeName}>
-                    {character.name}
+                  <Text style={styles.portraitPickerText}>
+                    {isPickingCombatAllyPortrait
+                      ? 'Preparing photo…'
+                      : combatAllyPortraitUri || combatAllyPortraitPresetId
+                        ? 'Change Character Image'
+                        : 'Add Character Image'}
                   </Text>
-                  <Text style={styles.initiativeScore}>
-                    {character.initiative >= 0 ? '+' : ''}
-                    {character.initiative}
+                </Pressable>
+                {(combatAllyPortraitUri || combatAllyPortraitPresetId) && (
+                  <View style={styles.portraitPreviewRow}>
+                    <Image
+                      accessibilityLabel="Temporary ally portrait preview"
+                      resizeMode="cover"
+                      source={getCharacterPortraitSource(
+                        combatAllyPortraitPresetId ?? undefined,
+                        combatAllyPortraitUri,
+                      )}
+                      style={styles.portraitPreview}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isSavingCombatAlly || isPickingCombatAllyPortrait}
+                      onPress={() => {
+                        setCombatAllyPortraitUri(null);
+                        setCombatAllyPortraitPresetId(null);
+                      }}
+                      style={styles.removePortraitButton}
+                    >
+                      <Text style={styles.removePortraitText}>Remove image</Text>
+                    </Pressable>
+                  </View>
+                )}
+                <View style={styles.initiativeHeader}>
+                  <Text style={styles.fieldLabel}>Initiative Modifier</Text>
+                  <Text accessibilityLiveRegion="polite" style={styles.initiativeValue}>
+                    {combatAllyInitiative >= 0 ? '+' : ''}
+                    {combatAllyInitiative}
                   </Text>
                 </View>
-              ))}
-            </ScrollView>
-            {actionError && <Text style={styles.errorText}>{actionError}</Text>}
-            <View style={styles.combatModalActions}>
-              <Pressable
-                accessibilityRole="button"
-                disabled={isUpdatingCombat}
-                onPress={() => void handleEndCombat()}
-                style={styles.endCombatButton}
-              >
-                <Text style={styles.endCombatText}>End Combat</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                disabled={isUpdatingCombat}
-                onPress={() => void handleAdvanceCombat()}
-                style={styles.saveButton}
-              >
-                <Text style={styles.saveText}>{isUpdatingCombat ? '...' : 'Next Turn  ›'}</Text>
-              </Pressable>
-            </View>
+                <Slider
+                  accessibilityLabel="Ally initiative modifier"
+                  accessibilityValue={{
+                    min: -4,
+                    max: 10,
+                    now: combatAllyInitiative,
+                    text: `${combatAllyInitiative >= 0 ? '+' : ''}${combatAllyInitiative}`,
+                  }}
+                  maximumTrackTintColor="#5B513F"
+                  maximumValue={10}
+                  minimumTrackTintColor="#D9A64D"
+                  minimumValue={-4}
+                  onValueChange={(value) => setCombatAllyInitiative(Math.round(value))}
+                  step={1}
+                  style={styles.initiativeSlider}
+                  thumbTintColor="#F4DDAE"
+                  value={combatAllyInitiative}
+                />
+                <View style={styles.sliderLimits}>
+                  <Text style={styles.sliderLimitText}>−4</Text>
+                  <Text style={styles.sliderLimitText}>+10</Text>
+                </View>
+                {combatAllyError && <Text style={styles.errorText}>{combatAllyError}</Text>}
+                <View style={styles.modalActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isSavingCombatAlly || isPickingCombatAllyPortrait}
+                    onPress={() => setIsAddingCombatAlly(false)}
+                    style={styles.cancelButton}
+                  >
+                    <Text style={styles.cancelText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={
+                      !combatAllyName.trim() ||
+                      !combatAllyClass ||
+                      isSavingCombatAlly ||
+                      isPickingCombatAllyPortrait
+                    }
+                    onPress={() => void handleAddCombatAlly()}
+                    style={[
+                      styles.saveButton,
+                      (!combatAllyName.trim() ||
+                        !combatAllyClass ||
+                        isSavingCombatAlly ||
+                        isPickingCombatAllyPortrait) &&
+                        styles.disabledSaveButton,
+                    ]}
+                  >
+                    <Text style={styles.saveText}>
+                      {isSavingCombatAlly ? 'Adding…' : 'Add to Encounter'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
+            ) : (
+              <>
+                <ScrollView style={styles.initiativeList}>
+                  {initiativeOrder.map((character, index) => (
+                    <View
+                      key={character.id}
+                      style={[
+                        styles.initiativeRow,
+                        character.id === campaign?.combat?.currentCharacterId &&
+                          styles.currentInitiativeRow,
+                      ]}
+                    >
+                      <Text style={styles.initiativeRank}>{index + 1}</Text>
+                      {getCharacterPortraitSource(
+                        character.portraitPresetId,
+                        character.portraitUri,
+                      ) ? (
+                        <Image
+                          accessibilityLabel={`${character.name} portrait`}
+                          resizeMode="cover"
+                          source={getCharacterPortraitSource(
+                            character.portraitPresetId,
+                            character.portraitUri,
+                          )}
+                          style={styles.initiativePortrait}
+                        />
+                      ) : (
+                        <View style={styles.initiativePortraitFallback}>
+                          <Text style={styles.initiativePortraitInitial}>
+                            {character.name.charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.initiativeCombatantInfo}>
+                        <Text numberOfLines={1} style={styles.initiativeName}>
+                          {character.name}
+                        </Text>
+                        {character.className && (
+                          <Text numberOfLines={1} style={styles.initiativeClass}>
+                            {character.race ? `${character.race} · ` : ''}
+                            {character.className}
+                          </Text>
+                        )}
+                        {character.initiativeRoll !== undefined &&
+                          character.initiativeBonus !== undefined && (
+                            <Text style={styles.initiativeCalculation}>
+                              {character.initiativeRoll}{' '}
+                              {character.initiativeBonus >= 0 ? '+' : '−'}{' '}
+                              {Math.abs(character.initiativeBonus)} = {character.initiative}
+                            </Text>
+                          )}
+                      </View>
+                      {character.maxHp !== undefined && (
+                        <View style={styles.combatHpControls}>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Damage ${character.name} by 1 HP`}
+                            disabled={isUpdatingCombat || (character.currentHp ?? character.maxHp) <= 0}
+                            onPress={() =>
+                              void handleAdjustCombatantHp(
+                                character.id,
+                                character.currentHp ?? character.maxHp!,
+                                character.maxHp!,
+                                -1,
+                              )
+                            }
+                            style={styles.combatHpButton}
+                          >
+                            <Text style={styles.combatHpButtonText}>−</Text>
+                          </Pressable>
+                          <Text style={styles.combatHpValue}>
+                            {character.currentHp ?? character.maxHp}/{character.maxHp}
+                          </Text>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Heal ${character.name} by 1 HP`}
+                            disabled={
+                              isUpdatingCombat ||
+                              (character.currentHp ?? character.maxHp) >= character.maxHp
+                            }
+                            onPress={() =>
+                              void handleAdjustCombatantHp(
+                                character.id,
+                                character.currentHp ?? character.maxHp!,
+                                character.maxHp!,
+                                1,
+                              )
+                            }
+                            style={styles.combatHpButton}
+                          >
+                            <Text style={styles.combatHpButtonText}>＋</Text>
+                          </Pressable>
+                        </View>
+                      )}
+                      <Text style={styles.initiativeScore}>
+                        {character.initiative >= 0 ? '+' : ''}
+                        {character.initiative}
+                      </Text>
+                    </View>
+                  ))}
+                </ScrollView>
+                {actionError && <Text style={styles.errorText}>{actionError}</Text>}
+                <View style={styles.combatModalActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isUpdatingCombat}
+                    onPress={() => void handleEndCombat()}
+                    style={styles.endCombatButton}
+                  >
+                    <Text style={styles.endCombatText}>End Combat</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isUpdatingCombat}
+                    onPress={() => void handleAdvanceCombat()}
+                    style={styles.saveButton}
+                  >
+                    <Text style={styles.saveText}>{isUpdatingCombat ? '...' : 'Next Turn  ›'}</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
           </View>
         </View>
       </Modal>
@@ -1065,11 +3801,1127 @@ const styles = StyleSheet.create({
     marginTop: 18,
     marginBottom: 12,
   },
+  encountersSection: {
+    paddingTop: 18,
+    paddingBottom: 12,
+  },
+  encountersHeading: {
+    marginBottom: 14,
+  },
+  encountersHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  encountersTitleGroup: {
+    flex: 1,
+    minWidth: 0,
+  },
+  joinLobbyButton: {
+    minHeight: 38,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 6,
+    backgroundColor: 'rgba(5, 14, 22, 0.78)',
+  },
+  joinLobbyButtonText: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  encountersTitle: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 29,
+    fontWeight: '700',
+  },
+  encountersDescription: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 14,
+    marginTop: 3,
+  },
+  prepareCombatButton: {
+    height: 52,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#D3A54D',
+    borderRadius: 5,
+    backgroundColor: '#100E09',
+    shadowColor: '#D3A54D',
+    shadowOpacity: 0.45,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 3,
+  },
+  prepareCombatButtonPressed: {
+    backgroundColor: '#2A2010',
+    borderColor: '#F4DDAE',
+    shadowOpacity: 0.8,
+    shadowRadius: 8,
+  },
+  prepareCombatInnerFrame: {
+    position: 'absolute',
+    top: 3,
+    right: 4,
+    bottom: 3,
+    left: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(211, 165, 77, 0.68)',
+    borderRadius: 3,
+  },
+  prepareCombatLeftOrnament: {
+    position: 'absolute',
+    left: 11,
+    color: '#E6B65C',
+    fontSize: 12,
+    textShadowColor: '#E6B65C',
+    textShadowRadius: 5,
+  },
+  prepareCombatContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  prepareCombatRightOrnament: {
+    position: 'absolute',
+    right: 13,
+    color: '#C69742',
+    fontSize: 28,
+    lineHeight: 30,
+    textShadowColor: '#D9A94F',
+    textShadowRadius: 6,
+  },
+  prepareCombatIcon: {
+    color: '#E8B95F',
+    fontSize: 24,
+    lineHeight: 28,
+    textShadowColor: '#D9A94F',
+    textShadowRadius: 5,
+  },
+  prepareCombatText: {
+    color: '#F2D18A',
+    fontFamily: 'serif',
+    fontSize: 17,
+    fontWeight: '700',
+    textShadowColor: '#D9A94F',
+    textShadowRadius: 5,
+  },
+  encounterEditorScreen: {
+    flex: 1,
+    paddingTop: Platform.OS === 'android' ? 10 : 20,
+    backgroundColor: '#030A12',
+  },
+  encounterEditorHeader: {
+    minHeight: 60,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginHorizontal: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(196, 151, 76, 0.45)',
+  },
+  encounterBackButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#B78A43',
+    borderRadius: 20,
+  },
+  encounterBackArrow: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 36,
+    lineHeight: 38,
+    marginTop: -3,
+  },
+  encounterEditorTitleBlock: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  encounterEditorTitle: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 25,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  encounterEditorCampaignName: {
+    color: '#D4A448',
+    fontFamily: 'serif',
+    fontSize: 10,
+    letterSpacing: 2,
+    marginTop: 1,
+  },
+  encounterHeaderSpacer: {
+    width: 40,
+  },
+  encounterEditorContent: {
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 22,
+  },
+  encounterFieldLabel: {
+    color: '#E6D5B5',
+    fontFamily: 'serif',
+    fontSize: 14,
+    marginBottom: 6,
+  },
+  encounterNameInput: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 6,
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 16,
+    backgroundColor: 'rgba(4, 13, 21, 0.82)',
+  },
+  encounterPartyHeading: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  encounterSectionTitle: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 19,
+    fontWeight: '700',
+  },
+  encounterSectionCount: {
+    color: '#C8B99D',
+    fontFamily: 'serif',
+    fontSize: 14,
+    marginLeft: 4,
+  },
+  encounterPartyList: {
+    gap: 9,
+    paddingBottom: 2,
+  },
+  encounterPartyMember: {
+    width: 78,
+    alignItems: 'center',
+  },
+  encounterPartyPortrait: {
+    width: 76,
+    height: 76,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 6,
+    backgroundColor: '#10202B',
+  },
+  encounterPartyPortraitImage: {
+    width: 76,
+    height: 76,
+    maxWidth: 76,
+    maxHeight: 76,
+  },
+  encounterPartyInitial: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 30,
+  },
+  encounterPartyName: {
+    maxWidth: 78,
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  encounterPartyClass: {
+    maxWidth: 78,
+    color: '#BDA476',
+    fontFamily: 'serif',
+    fontSize: 10,
+  },
+  encounterPartyEmpty: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 13,
+    paddingVertical: 9,
+  },
+  encounterDivider: {
+    height: 1,
+    marginTop: 14,
+    marginBottom: 11,
+    backgroundColor: 'rgba(196, 151, 76, 0.62)',
+  },
+  encounterAllyHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 12,
+    marginBottom: 9,
+  },
+  encounterAllyIcon: {
+    color: '#DDB76F',
+    fontSize: 20,
+  },
+  encounterAllyPortraitFallback: {
+    width: 60,
+    height: 62,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 5,
+    backgroundColor: '#10202B',
+  },
+  encounterEnemiesHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 9,
+  },
+  encounterEnemiesTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  encounterSkull: {
+    color: '#DDB76F',
+    fontSize: 22,
+  },
+  addEnemyButton: {
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#D3A54D',
+    borderRadius: 6,
+    backgroundColor: 'rgba(167, 122, 49, 0.16)',
+  },
+  addEnemyPlus: {
+    color: '#E8B95F',
+    fontSize: 19,
+  },
+  addEnemyButtonText: {
+    color: '#F2D18A',
+    fontFamily: 'serif',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  encounterEnemyRow: {
+    minHeight: 76,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    padding: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 151, 76, 0.6)',
+    borderRadius: 7,
+    backgroundColor: 'rgba(5, 14, 22, 0.92)',
+  },
+  encounterEnemyPortrait: {
+    width: 60,
+    height: 62,
+    flexShrink: 0,
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 5,
+  },
+  encounterEnemyInfo: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    paddingHorizontal: 9,
+  },
+  encounterEnemyName: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  encounterEnemyMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 5,
+    marginTop: 4,
+  },
+  encounterEnemyInitiative: {
+    color: '#C8B99D',
+    fontFamily: 'serif',
+    fontSize: 11,
+  },
+  encounterEnemyModeBadge: {
+    color: '#D9B66D',
+    fontFamily: 'serif',
+    fontSize: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: '#8F713D',
+    borderRadius: 10,
+  },
+  enemyRowIconButton: {
+    width: 28,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  enemyRowEditIcon: {
+    color: '#D8C9AB',
+    fontSize: 18,
+  },
+  enemyRowRemoveIcon: {
+    color: '#E25F4E',
+    fontSize: 25,
+    lineHeight: 28,
+  },
+  encounterEmptyEnemies: {
+    minHeight: 78,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(196, 151, 76, 0.55)',
+    borderRadius: 7,
+    backgroundColor: 'rgba(5, 14, 22, 0.7)',
+  },
+  encounterEmptyEnemiesTitle: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 14,
+  },
+  encounterEmptyEnemiesText: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 3,
+  },
+  encounterSummaryBar: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 4,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#A77A31',
+    borderRadius: 7,
+    backgroundColor: 'rgba(5, 14, 22, 0.86)',
+  },
+  encounterSummaryIcon: {
+    color: '#DDB76F',
+    fontSize: 18,
+  },
+  encounterSummaryText: {
+    color: '#E1D1B5',
+    fontFamily: 'serif',
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  encounterEditorFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    paddingHorizontal: 18,
+    paddingTop: 9,
+    paddingBottom: Platform.OS === 'ios' ? 20 : 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(196, 151, 76, 0.42)',
+    backgroundColor: '#030A12',
+  },
+  encounterEditorDeleteButton: {
+    minHeight: 42,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 95, 78, 0.65)',
+    borderRadius: 6,
+  },
+  encounterEditorDeleteText: {
+    color: '#E88A7F',
+    fontFamily: 'serif',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  encounterSaveButton: {
+    flex: 1,
+    minHeight: 48,
+    minWidth: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 7,
+    backgroundColor: 'rgba(5, 14, 22, 0.95)',
+  },
+  encounterSaveButtonText: {
+    color: '#EBC77D',
+    fontFamily: 'serif',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  encounterOpenLobbyButton: {
+    flex: 1,
+    minHeight: 48,
+    minWidth: 130,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#F0C05D',
+    borderRadius: 7,
+    backgroundColor: '#80541C',
+    shadowColor: '#E8B95F',
+    shadowOpacity: 0.65,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 3,
+  },
+  encounterOpenLobbyDisabled: {
+    opacity: 0.48,
+  },
+  encounterOpenLobbyIcon: {
+    color: '#F4DDAE',
+    fontSize: 18,
+  },
+  encounterOpenLobbyText: {
+    color: '#FFF0C5',
+    fontFamily: 'serif',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  encounterSaveDraftButton: {
+    width: '100%',
+    alignItems: 'center',
+    paddingVertical: 5,
+  },
+  encounterSaveDraftText: {
+    color: '#9F927B',
+    fontFamily: 'serif',
+    fontSize: 12,
+  },
+  enemyPickerBackdrop: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 18,
+    backgroundColor: 'rgba(0, 4, 9, 0.94)',
+  },
+  enemyPickerCard: {
+    width: '100%',
+    maxWidth: 520,
+    maxHeight: '100%',
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 12,
+    backgroundColor: '#07111B',
+  },
+  enemyPickerHeader: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  enemyPickerTitle: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 24,
+    fontWeight: '700',
+  },
+  enemyPickerCloseButton: {
+    position: 'absolute',
+    right: 0,
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#B78A43',
+    borderRadius: 17,
+  },
+  enemyPickerCloseText: {
+    color: '#EAD5AA',
+    fontSize: 26,
+    lineHeight: 28,
+    marginTop: -2,
+  },
+  enemyPickerContent: {
+    paddingBottom: 8,
+  },
+  enemySearchInput: {
+    minHeight: 42,
+    marginTop: 7,
+    marginBottom: 11,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#53606A',
+    borderRadius: 7,
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 14,
+    backgroundColor: '#0A1722',
+  },
+  customEnemyCreateButton: {
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 11,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#B78A43',
+    borderRadius: 7,
+    backgroundColor: '#182315',
+  },
+  customEnemyCreateButtonDisabled: {
+    opacity: 0.55,
+  },
+  customEnemyCreateButtonText: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  enemyPresetGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  enemyPresetCard: {
+    width: '31.5%',
+    minWidth: 82,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#80683D',
+    borderRadius: 7,
+    backgroundColor: '#0B1721',
+  },
+  enemyPresetCardSelected: {
+    borderColor: '#F3C45D',
+    shadowColor: '#E8B95F',
+    shadowOpacity: 0.8,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
+  },
+  enemyPresetImage: {
+    width: '100%',
+    height: 76,
+  },
+  enemyPresetName: {
+    color: '#EEE1C9',
+    fontFamily: 'serif',
+    fontSize: 12,
+    textAlign: 'center',
+    paddingVertical: 4,
+  },
+  customEnemyPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  customEnemyPreview: {
+    width: 72,
+    height: 72,
+    flexShrink: 0,
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 7,
+    backgroundColor: '#0B1721',
+  },
+  customEnemyPreviewHint: {
+    flex: 1,
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 12,
+  },
+  enemySearchEmpty: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    textAlign: 'center',
+    paddingVertical: 16,
+  },
+  enemyFormNameInput: {
+    minHeight: 42,
+    marginTop: 12,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#53606A',
+    borderRadius: 6,
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 15,
+    backgroundColor: '#0A1722',
+  },
+  enemyQuantityInitiativeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 10,
+  },
+  enemyHpRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
+  enemyHpInput: {
+    width: 74,
+    height: 36,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#7C6745',
+    borderRadius: 6,
+    color: '#F4DDAE',
+    textAlign: 'center',
+    backgroundColor: '#0A1722',
+  },
+  enemyFormLabel: {
+    color: '#D7C6A8',
+    fontFamily: 'serif',
+    fontSize: 12,
+  },
+  enemyQuantityControl: {
+    height: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#7C6745',
+    borderRadius: 6,
+  },
+  enemyQuantityButton: {
+    width: 31,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  enemyQuantityButtonText: {
+    color: '#E8B95F',
+    fontSize: 19,
+  },
+  enemyQuantityInput: {
+    width: 36,
+    height: 34,
+    color: '#F4DDAE',
+    textAlign: 'center',
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: 'rgba(124, 103, 69, 0.7)',
+  },
+  enemyInitiativeInput: {
+    width: 56,
+    height: 36,
+    paddingHorizontal: 5,
+    borderWidth: 1,
+    borderColor: '#7C6745',
+    borderRadius: 6,
+    color: '#F4DDAE',
+    textAlign: 'center',
+    backgroundColor: '#0A1722',
+  },
+  enemyModeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 11,
+  },
+  enemyModeOptions: {
+    flex: 1,
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: '#80683D',
+    borderRadius: 6,
+  },
+  enemyModeButton: {
+    flex: 1,
+    minHeight: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  enemyModeButtonSelected: {
+    borderWidth: 1,
+    borderColor: '#F0C05D',
+    borderRadius: 6,
+    backgroundColor: 'rgba(142, 99, 33, 0.38)',
+  },
+  enemyModeButtonText: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 12,
+  },
+  enemyModeButtonTextSelected: {
+    color: '#FFE8B0',
+  },
+  enemyModeDescription: {
+    color: '#AEB7BC',
+    fontFamily: 'serif',
+    fontSize: 11,
+    marginTop: 7,
+  },
+  enemyPickerAddButton: {
+    minHeight: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#F0C05D',
+    borderRadius: 7,
+    backgroundColor: '#80541C',
+  },
+  enemyPickerAddButtonDisabled: {
+    borderColor: '#65583F',
+    backgroundColor: '#29251D',
+  },
+  enemyPickerAddButtonText: {
+    color: '#FFF0C5',
+    fontFamily: 'serif',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  emptyEncountersPanel: {
+    minHeight: 132,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 151, 76, 0.48)',
+    borderRadius: 8,
+    backgroundColor: 'rgba(5, 14, 22, 0.84)',
+  },
+  encounterCard: {
+    minHeight: 132,
+    flexDirection: 'row',
+    marginBottom: 12,
+    padding: 7,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(196, 151, 76, 0.68)',
+    borderRadius: 8,
+    backgroundColor: 'rgba(5, 14, 22, 0.94)',
+  },
+  encounterArtwork: {
+    width: 96,
+    height: 116,
+    maxHeight: 116,
+    flexShrink: 0,
+    borderRadius: 5,
+    backgroundColor: '#10202B',
+  },
+  encounterDetails: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    paddingLeft: 12,
+    paddingVertical: 5,
+  },
+  encounterCardHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  encounterName: {
+    flex: 1,
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  encounterStatusBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderRadius: 10,
+  },
+  draftStatusBadge: {
+    borderColor: '#827659',
+    backgroundColor: 'rgba(130, 118, 89, 0.16)',
+  },
+  readyStatusBadge: {
+    borderColor: '#61926C',
+    backgroundColor: 'rgba(76, 130, 86, 0.18)',
+  },
+  progressStatusBadge: {
+    borderColor: '#C69A50',
+    backgroundColor: 'rgba(167, 122, 49, 0.19)',
+  },
+  encounterStatusText: {
+    fontFamily: 'serif',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  draftStatusText: {
+    color: '#C5B99F',
+  },
+  readyStatusText: {
+    color: '#A8D2AE',
+  },
+  progressStatusText: {
+    color: '#F2D18A',
+  },
+  encounterSummary: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 12,
+    marginTop: 6,
+  },
+  encounterActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 10,
+  },
+  encounterEditButton: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    borderWidth: 1,
+    borderColor: '#827659',
+    borderRadius: 5,
+  },
+  encounterEditIcon: {
+    color: '#D0BE9C',
+    fontSize: 14,
+  },
+  encounterDeleteButton: {
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 95, 78, 0.65)',
+    borderRadius: 5,
+  },
+  encounterDeleteText: {
+    color: '#E88A7F',
+    fontFamily: 'serif',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  encounterLobbyButton: {
+    minHeight: 34,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 7,
+    borderWidth: 1,
+    borderColor: '#B78A43',
+    borderRadius: 5,
+    backgroundColor: 'rgba(167, 122, 49, 0.17)',
+  },
+  encounterActionText: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  encounterLobbyIcon: {
+    color: '#E8B95F',
+    fontSize: 15,
+  },
+  encounterDisabledButton: {
+    borderColor: '#514A3D',
+    backgroundColor: 'rgba(74, 67, 53, 0.12)',
+  },
+  encounterDisabledText: {
+    color: '#8D806B',
+  },
+  encounterResumeButton: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 5,
+    backgroundColor: 'rgba(167, 122, 49, 0.18)',
+  },
+  encounterResumeIcon: {
+    color: '#E8B95F',
+    fontSize: 12,
+  },
+  encounterResumeText: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   sectionTitle: {
     color: '#F4DDAE',
     fontFamily: 'serif',
     fontSize: 27,
     fontWeight: '700',
+  },
+  graveyardSection: {
+    paddingTop: 14,
+  },
+  graveyardHeading: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  graveyardTitle: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 34,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  graveyardOrnament: {
+    width: '78%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  graveyardRule: {
+    height: StyleSheet.hairlineWidth,
+    flex: 1,
+    backgroundColor: 'rgba(196, 151, 76, 0.8)',
+  },
+  graveyardStar: {
+    color: '#E8B95F',
+    fontSize: 21,
+    lineHeight: 24,
+  },
+  graveyardDescription: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 15,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  graveyardCard: {
+    height: 142,
+    maxHeight: 142,
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    marginBottom: 12,
+    padding: 5,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 8,
+    backgroundColor: 'rgba(5, 14, 22, 0.92)',
+  },
+  graveyardPortrait: {
+    width: 88,
+    height: 130,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(196, 151, 76, 0.65)',
+    borderRadius: 5,
+    backgroundColor: '#10202B',
+  },
+  graveyardPortraitImage: {
+    width: 88,
+    height: 130,
+    maxWidth: 88,
+    maxHeight: 130,
+    flexShrink: 0,
+  },
+  graveyardCharacterInfo: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    paddingLeft: 10,
+    paddingRight: 4,
+    paddingVertical: 8,
+  },
+  graveyardCharacterHeading: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  graveyardMenuButton: {
+    width: 34,
+    height: 30,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  restoreCharacterButton: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 5,
+    backgroundColor: 'rgba(167, 122, 49, 0.14)',
+  },
+  restoreCharacterText: {
+    color: '#E8B95F',
+    fontFamily: 'serif',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  graveyardActionRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  memorialCandle: {
+    width: 54,
+    height: 68,
+    flexShrink: 0,
+  },
+  graveyardFooter: {
+    alignItems: 'center',
+    marginTop: 2,
+    paddingVertical: 8,
+  },
+  graveyardFooterText: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 13,
+    marginTop: 4,
+    textAlign: 'center',
   },
   addCharacterButton: {
     minHeight: 42,
@@ -1274,6 +5126,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#07111B',
   },
+  onlineLobbyModal: {
+    maxHeight: '84%',
+  },
   combatModal: {
     width: '100%',
     maxWidth: 420,
@@ -1353,6 +5208,354 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     color: '#F4DDAE',
     fontSize: 16,
+  },
+  characterPresetSection: {
+    marginTop: 14,
+  },
+  characterPresetHint: {
+    color: '#BDA476',
+    fontFamily: 'serif',
+    fontSize: 12,
+    marginTop: 3,
+    marginBottom: 8,
+  },
+  characterPresetGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  characterPresetCard: {
+    width: '31.5%',
+    minWidth: 82,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#80683D',
+    borderRadius: 7,
+    backgroundColor: '#0B1721',
+  },
+  characterPresetCardSelected: {
+    borderColor: '#F3C45D',
+    shadowColor: '#E8B95F',
+    shadowOpacity: 0.8,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
+  },
+  characterPresetImage: {
+    width: '100%',
+    height: 76,
+  },
+  characterPresetName: {
+    color: '#EEE1C9',
+    fontFamily: 'serif',
+    fontSize: 11,
+    fontWeight: '700',
+    textAlign: 'center',
+    paddingTop: 4,
+  },
+  characterPresetClass: {
+    color: '#BDA476',
+    fontFamily: 'serif',
+    fontSize: 9,
+    textAlign: 'center',
+    paddingHorizontal: 2,
+    paddingBottom: 4,
+  },
+  lobbyRoster: {
+    maxHeight: 300,
+    marginTop: 16,
+  },
+  onlineLobbyCallout: {
+    marginTop: 8,
+    marginBottom: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 151, 76, 0.48)',
+    borderRadius: 7,
+    backgroundColor: 'rgba(5, 14, 22, 0.78)',
+  },
+  onlineLobbyStatus: {
+    color: '#BDAE98',
+    fontFamily: 'serif',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  onlineLobbyAction: {
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 9,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 6,
+    backgroundColor: 'rgba(167, 122, 49, 0.16)',
+  },
+  onlineLobbyActionText: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  disabledAction: {
+    opacity: 0.45,
+  },
+  onlineJoinCodePanel: {
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 7,
+    backgroundColor: 'rgba(167, 122, 49, 0.12)',
+  },
+  onlineJoinCode: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 22,
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+  onlineLobbyStateRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 8,
+  },
+  onlineLobbyState: {
+    color: '#E8B95F',
+    fontFamily: 'serif',
+    fontSize: 12,
+  },
+  onlineLobbyRoster: {
+    flexGrow: 0,
+    maxHeight: 280,
+    marginTop: 6,
+  },
+  onlineMemberRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(196, 151, 76, 0.3)',
+  },
+  onlineMemberText: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 9,
+  },
+  onlineCharactersTitle: {
+    marginTop: 14,
+  },
+  onlineCharacterRow: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(196, 151, 76, 0.3)',
+  },
+  characterClaimButton: {
+    minWidth: 64,
+    minHeight: 34,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 5,
+    backgroundColor: 'rgba(167, 122, 49, 0.16)',
+  },
+  characterReleaseButton: {
+    borderColor: '#987443',
+    backgroundColor: 'rgba(5, 14, 22, 0.78)',
+  },
+  characterClaimText: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  closeOnlineLobbyButton: {
+    minHeight: 42,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#8F5142',
+    borderRadius: 6,
+    backgroundColor: 'rgba(120, 48, 35, 0.18)',
+  },
+  closeOnlineLobbyText: {
+    color: '#E9A18C',
+    fontFamily: 'serif',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  onlineLobbyActionSpacer: {
+    flex: 1,
+  },
+  lobbySectionTitle: {
+    color: '#E8B95F',
+    fontFamily: 'serif',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginBottom: 5,
+  },
+  lobbyEnemyHeader: {
+    marginTop: 16,
+  },
+  lobbyInitiativeEntry: {
+    marginBottom: 8,
+  },
+  lobbyMemberRow: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(196, 151, 76, 0.3)',
+  },
+  lobbyMemberPortrait: {
+    width: 40,
+    height: 40,
+    flexShrink: 0,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 5,
+  },
+  lobbyMemberInitial: {
+    width: 40,
+    height: 40,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 5,
+    backgroundColor: '#10202B',
+  },
+  lobbyMemberInitialText: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 18,
+  },
+  lobbyMemberInfo: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 9,
+  },
+  lobbyMemberName: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 14,
+  },
+  lobbyMemberClass: {
+    color: '#BDA476',
+    fontFamily: 'serif',
+    fontSize: 11,
+    marginTop: 1,
+  },
+  lobbyInitiative: {
+    color: '#E8B95F',
+    fontFamily: 'serif',
+    fontSize: 13,
+  },
+  lobbyEnemyInitiative: {
+    color: '#BDA476',
+    fontFamily: 'serif',
+    fontSize: 12,
+  },
+  initiativeSubmission: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingBottom: 4,
+  },
+  initiativeSubmissionResult: {
+    flex: 1,
+    color: '#BFE0C4',
+    fontFamily: 'serif',
+    fontSize: 12,
+  },
+  initiativeSubmissionBlock: {
+    marginHorizontal: 10,
+    paddingTop: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(196, 151, 76, 0.2)',
+  },
+  initiativeRollHint: {
+    color: '#A8987D',
+    fontFamily: 'serif',
+    fontSize: 10,
+  },
+  initiativeSubmissionStale: {
+    color: '#E9A18F',
+  },
+  initiativeRollInput: {
+    width: 54,
+    height: 29,
+    paddingHorizontal: 6,
+    borderWidth: 1,
+    borderColor: '#8F713D',
+    borderRadius: 5,
+    color: '#F4DDAE',
+    textAlign: 'center',
+    backgroundColor: 'rgba(5, 14, 22, 0.9)',
+  },
+  initiativeRollButton: {
+    minHeight: 28,
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#8F713D',
+    borderRadius: 5,
+    backgroundColor: 'rgba(167, 122, 49, 0.14)',
+  },
+  initiativeRollButtonText: {
+    color: '#E8B95F',
+    fontFamily: 'serif',
+    fontSize: 11,
+  },
+  initiativeResetButton: {
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#8F713D',
+    borderRadius: 5,
+  },
+  initiativeResetText: {
+    color: '#E8B95F',
+    fontFamily: 'serif',
+    fontSize: 11,
+  },
+  initiativeSubmissionDisabled: {
+    opacity: 0.45,
+  },
+  rollUnrolledButton: {
+    alignSelf: 'flex-start',
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#A77A31',
+    borderRadius: 5,
+    backgroundColor: 'rgba(167, 122, 49, 0.14)',
+  },
+  rollUnrolledText: {
+    color: '#E8B95F',
+    fontFamily: 'serif',
+    fontSize: 12,
   },
   portraitPickerButton: {
     alignItems: 'center',
@@ -1504,10 +5707,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   initiativeList: {
+    maxHeight: 300,
     marginTop: 14,
   },
   initiativeRow: {
-    minHeight: 45,
+    minHeight: 54,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -1525,16 +5729,106 @@ const styles = StyleSheet.create({
     fontFamily: 'serif',
     fontSize: 15,
   },
-  initiativeName: {
+  initiativePortrait: {
+    width: 36,
+    height: 36,
+    flexShrink: 0,
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 6,
+    backgroundColor: '#0B1721',
+  },
+  initiativePortraitFallback: {
+    width: 36,
+    height: 36,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#987443',
+    borderRadius: 6,
+    backgroundColor: '#0B1721',
+  },
+  initiativePortraitInitial: {
+    color: '#E8B95F',
+    fontFamily: 'serif',
+    fontSize: 17,
+  },
+  initiativeCombatantInfo: {
     flex: 1,
+    minWidth: 0,
+  },
+  combatHpControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  combatHpButton: {
+    width: 24,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#8F713D',
+    borderRadius: 5,
+    backgroundColor: 'rgba(167, 122, 49, 0.14)',
+  },
+  combatHpButtonText: {
+    color: '#E8B95F',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  combatHpValue: {
+    minWidth: 44,
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 11,
+    textAlign: 'center',
+  },
+  initiativeName: {
     color: '#F4DDAE',
     fontFamily: 'serif',
     fontSize: 16,
+  },
+  initiativeClass: {
+    color: '#BDA476',
+    fontFamily: 'serif',
+    fontSize: 11,
+    marginTop: 1,
+  },
+  initiativeCalculation: {
+    color: '#BFE0C4',
+    fontFamily: 'serif',
+    fontSize: 10,
+    marginTop: 2,
   },
   initiativeScore: {
     color: '#E8B95F',
     fontFamily: 'serif',
     fontSize: 15,
+  },
+  addCombatAllyButton: {
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#B78A43',
+    borderRadius: 6,
+    backgroundColor: 'rgba(167, 122, 49, 0.14)',
+  },
+  addCombatAllyText: {
+    color: '#F4DDAE',
+    fontFamily: 'serif',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  combatAllyFormScroll: {
+    flexShrink: 1,
+    marginTop: 6,
+  },
+  combatAllyFormContent: {
+    paddingBottom: 4,
   },
   combatModalActions: {
     flexDirection: 'row',
