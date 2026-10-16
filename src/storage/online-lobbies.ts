@@ -83,6 +83,7 @@ export type OnlineVisibleCombatant = {
   portrait_preset_id: string | null;
   sort_order: number;
   visible_member_count: number;
+  is_defeated?: boolean;
 };
 
 type OnlineDmEnemyData = {
@@ -100,6 +101,7 @@ export type OnlineLobbySnapshot = {
   status: 'open' | 'closed';
   combat_started: boolean;
   current_round: number;
+  current_turn_key: string | null;
   visibility_revision: number;
   initiative_schema_version: number;
   background_id: CampaignEncounterBackgroundId | null;
@@ -125,6 +127,11 @@ function parseSnapshot(value: unknown): OnlineLobbySnapshot {
   }
   const snapshot = value as Partial<OnlineLobbySnapshot>;
   const visibleCombatants = snapshot.visible_combatants ?? [];
+  if (snapshot.current_turn_key === undefined) {
+    throw new Error(
+      'Turn-by-turn online combat is not enabled on this Supabase project. Run supabase/migrations/20261016170000_combat_turns.sql in the Supabase SQL Editor.',
+    );
+  }
   if (
     typeof snapshot.visibility_revision !== 'number' ||
     typeof snapshot.initiative_schema_version !== 'number'
@@ -157,6 +164,8 @@ function parseSnapshot(value: unknown): OnlineLobbySnapshot {
     (snapshot.status !== 'open' && snapshot.status !== 'closed') ||
     typeof snapshot.combat_started !== 'boolean' ||
     typeof snapshot.current_round !== 'number' ||
+    (snapshot.current_turn_key !== null &&
+      typeof snapshot.current_turn_key !== 'string') ||
     typeof snapshot.visibility_revision !== 'number' ||
     !Number.isInteger(snapshot.visibility_revision) ||
     snapshot.visibility_revision < 0 ||
@@ -251,7 +260,8 @@ function parseSnapshot(value: unknown): OnlineLobbySnapshot {
         (participant.current_hp === undefined ||
           (Number.isInteger(participant.current_hp) && participant.current_hp >= 0)) &&
         (participant.max_hp === undefined ||
-          (Number.isInteger(participant.max_hp) && participant.max_hp >= 1)) &&
+          (Number.isInteger(participant.max_hp) &&
+            participant.max_hp >= (participant.is_defeated ? 0 : 1))) &&
         (participant.current_hp === undefined ||
           participant.max_hp === undefined ||
           participant.current_hp <= participant.max_hp) &&
@@ -260,7 +270,7 @@ function parseSnapshot(value: unknown): OnlineLobbySnapshot {
           typeof participant.portrait_preset_id === 'string') &&
         Number.isInteger(participant.sort_order) &&
         Number.isInteger(participant.visible_member_count) &&
-        participant.visible_member_count >= 1,
+        participant.visible_member_count >= (participant.is_defeated ? 0 : 1),
     );
   if (
     !membersAreValid ||
@@ -324,6 +334,35 @@ function parseSnapshot(value: unknown): OnlineLobbySnapshot {
   } as OnlineLobbySnapshot;
 }
 
+export const PORTRAIT_URL_PREFIX = 'url:';
+const PORTRAIT_BUCKET = 'combat-portraits';
+
+// Uploaded photos live only on the device, so share them through Supabase
+// Storage and pass the public URL through the existing portrait text column.
+async function resolveSharedPortrait(
+  identity: SupabaseIdentity,
+  ownerId: string,
+  presetId: string | undefined,
+  portraitUri: string | null | undefined,
+): Promise<string> {
+  if (presetId || !portraitUri) return presetId ?? '';
+  try {
+    const storage = getSupabaseClient().storage.from(PORTRAIT_BUCKET);
+    const body = await (await fetch(portraitUri)).arrayBuffer();
+    const path = `${identity.userId}/${ownerId}.jpg`;
+    const { error } = await storage.upload(path, body, {
+      contentType: 'image/jpeg',
+      upsert: true,
+      cacheControl: '60',
+    });
+    if (error) return '';
+    const version = Date.now();
+    return `${PORTRAIT_URL_PREFIX}${storage.getPublicUrl(path).data.publicUrl}?v=${version}`;
+  } catch {
+    return '';
+  }
+}
+
 export async function createOnlineCombatLobby(
   identity: SupabaseIdentity,
   campaignId: string,
@@ -334,17 +373,24 @@ export async function createOnlineCombatLobby(
 ): Promise<OnlineLobbySnapshot> {
   requireIdentity(identity);
   const supabase = getSupabaseClient();
-  const roster = characters
-    .filter((character) => (character.status ?? 'active') === 'active')
-    .map((character) => ({
-      id: character.id,
-      name: character.name,
-      className: character.className,
-      race: character.race ?? '',
-      portraitPresetId: character.portraitPresetId ?? '',
-      initiativeBonus: character.initiative,
-      armorClass: character.armorClass ?? 10,
-    }));
+  const roster = await Promise.all(
+    characters
+      .filter((character) => (character.status ?? 'active') === 'active')
+      .map(async (character) => ({
+        id: character.id,
+        name: character.name,
+        className: character.className,
+        race: character.race ?? '',
+        portraitPresetId: await resolveSharedPortrait(
+          identity,
+          character.id,
+          character.portraitPresetId,
+          character.portraitUri,
+        ),
+        initiativeBonus: character.initiative,
+        armorClass: character.armorClass ?? 10,
+      })),
+  );
   const enemyData = encounter.enemies.map((enemy) => ({
     id: enemy.id,
     name: enemy.name,
@@ -366,14 +412,19 @@ export async function createOnlineCombatLobby(
     isActive: false,
     conditions: [],
   }));
-  const allyData = allies.map((ally) => ({
+  const allyData = await Promise.all(allies.map(async (ally) => ({
     id: ally.id,
     name: ally.name,
     initiative: ally.initiative,
     armorClass: ally.armorClass ?? 10,
-    portraitPresetId: ally.portraitPresetId ?? '',
+    portraitPresetId: await resolveSharedPortrait(
+      identity,
+      ally.id,
+      ally.portraitPresetId,
+      ally.portraitUri,
+    ),
     maxHp: ally.maxHp ?? 10,
-  }));
+  })));
   const { data, error } = await supabase.rpc('create_combat_lobby_with_reinforcements', {
     p_campaign_id: campaignId,
     p_encounter_id: encounter.id,
@@ -417,7 +468,54 @@ export async function createOnlineCombatLobby(
   }
   const snapshot = await loadOnlineLobbySnapshot(identity, created.lobby_id);
   await rememberOnlineLobby(identity, created.lobby_id);
+  await AsyncStorage.setItem(
+    `${LOBBY_SIGNATURE_KEY_PREFIX}${created.lobby_id}`,
+    getEncounterSignature(encounter, characters, allies, backgroundId),
+  );
   return snapshot;
+}
+
+const LOBBY_SIGNATURE_KEY_PREFIX = 'dnd-initiative-tracker.online-lobby-signature.v1.';
+
+function getEncounterSignature(
+  encounter: CampaignEncounter,
+  characters: CampaignCharacter[],
+  allies: NonNullable<CampaignEncounter['allies']>,
+  backgroundId: CampaignEncounterBackgroundId | null,
+): string {
+  const text = JSON.stringify({
+    name: encounter.name,
+    enemies: encounter.enemies,
+    allies,
+    backgroundId,
+    characters: characters
+      .filter((character) => (character.status ?? 'active') === 'active')
+      .map((character) => [
+        character.id,
+        character.name,
+        character.initiative,
+        character.armorClass,
+        character.portraitPresetId,
+        character.portraitUri,
+      ]),
+  });
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0;
+  }
+  return `${text.length}:${hash}`;
+}
+
+// A lobby built before the encounter was edited no longer matches it.
+export async function isLobbyCurrentForEncounter(
+  lobbyId: string,
+  encounter: CampaignEncounter,
+  characters: CampaignCharacter[],
+  allies: NonNullable<CampaignEncounter['allies']> = [],
+  backgroundId: CampaignEncounterBackgroundId | null = null,
+): Promise<boolean> {
+  const stored = await AsyncStorage.getItem(`${LOBBY_SIGNATURE_KEY_PREFIX}${lobbyId}`);
+  return stored === getEncounterSignature(encounter, characters, allies, backgroundId);
 }
 
 export async function rememberOnlineLobby(
@@ -589,6 +687,54 @@ export async function startOnlineCombat(
   }
 }
 
+export async function setOnlineParticipantHp(
+  identity: SupabaseIdentity,
+  lobbyId: string,
+  participantId: string,
+  currentHp: number,
+): Promise<void> {
+  requireIdentity(identity);
+  const { error } = await getSupabaseClient().rpc('set_combat_participant_hp', {
+    p_lobby_id: lobbyId,
+    p_participant_id: participantId,
+    p_current_hp: Math.max(0, Math.round(currentHp)),
+  });
+  if (error) {
+    const migrationMissing =
+      error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(error.message);
+    throw new Error(
+      migrationMissing
+        ? 'Enemy hit points are not enabled on this Supabase project. Run supabase/migrations/20261016190000_enemy_hit_points.sql in the Supabase SQL Editor.'
+        : `Hit points could not be saved: ${error.message}`,
+    );
+  }
+}
+
+export async function reviveOnlineParticipant(
+  identity: SupabaseIdentity,
+  lobbyId: string,
+  participantId: string,
+  hp: number,
+): Promise<void> {
+  requireIdentity(identity);
+  const { error } = await getSupabaseClient().rpc('revive_combat_participant', {
+    p_lobby_id: lobbyId,
+    p_participant_id: participantId,
+    p_hp: hp,
+  });
+  if (error) {
+    const migrationMissing =
+      error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(error.message);
+    throw new Error(
+      migrationMissing
+        ? 'Reviving is not enabled on this Supabase project. Run supabase/migrations/20261016210000_defeated_in_initiative.sql in the Supabase SQL Editor.'
+        : `Combatant could not be revived: ${error.message}`,
+    );
+  }
+}
+
 export async function activateOnlineCombatReinforcement(
   identity: SupabaseIdentity,
   lobbyId: string,
@@ -614,12 +760,12 @@ export async function activateOnlineCombatReinforcement(
   }
 }
 
-export async function advanceOnlineCombatRound(
+export async function advanceOnlineCombatTurn(
   identity: SupabaseIdentity,
   lobbyId: string,
 ): Promise<void> {
   requireIdentity(identity);
-  const { error } = await getSupabaseClient().rpc('advance_combat_lobby_round', {
+  const { error } = await getSupabaseClient().rpc('advance_combat_lobby_turn', {
     p_lobby_id: lobbyId,
   });
   if (error) {
@@ -628,8 +774,8 @@ export async function advanceOnlineCombatRound(
       /could not find the function|schema cache/i.test(error.message);
     throw new Error(
       migrationMissing
-        ? 'Combat round advancement is not enabled on this Supabase project. Run supabase/migrations/20261016140000_combat_reinforcements.sql in the Supabase SQL Editor.'
-        : `Combat round could not be advanced: ${error.message}`,
+        ? 'Turn-by-turn online combat is not enabled on this Supabase project. Run supabase/migrations/20261016170000_combat_turns.sql in the Supabase SQL Editor.'
+        : `Combat turn could not be advanced: ${error.message}`,
     );
   }
 }

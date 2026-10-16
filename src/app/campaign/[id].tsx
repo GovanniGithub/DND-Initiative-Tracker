@@ -9,6 +9,7 @@ import {
   saveCampaignCustomEnemyPreset,
   saveCampaignEncounter,
   setCampaignCharacterStatus,
+  sortCampaignCombatants,
   updateCampaignCombatantHp,
   updateCampaignCharacterArmorClass,
   updateCampaignCharacterInitiative,
@@ -24,6 +25,7 @@ import {
   claimOnlineLobbyCharacter,
   closeOnlineCombatLobby,
   createOnlineCombatLobby,
+  isLobbyCurrentForEncounter,
   loadOnlineLobbySnapshot,
   resetDmInitiative,
   restoreLastOnlineLobby,
@@ -32,6 +34,7 @@ import {
   subscribeToOnlineCombatLobby,
   type OnlineLobbySnapshot,
 } from '@/storage/online-lobbies';
+
 import {
   ensureSupabaseIdentity,
   isSupabaseConfigured,
@@ -60,6 +63,10 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const ACTIVE_TURN_FRAME = require('../../../assets/images/active-turn-frame-wide.png');
+
+
 
 type CampaignTab = 'Party' | 'Encounters' | 'Graveyard' | 'History';
 const CAMPAIGN_TABS: CampaignTab[] = ['Party', 'Encounters', 'Graveyard', 'History'];
@@ -335,10 +342,6 @@ function getCharacterPortraitSource(
   const preset = CHARACTER_PRESETS.find((item) => item.id === portraitPresetId);
   if (preset) return preset.source;
   return portraitUri ? { uri: portraitUri } : undefined;
-}
-
-function getInitiativeOrder(characters: CampaignCharacter[]): CampaignCharacter[] {
-  return [...characters].sort((left, right) => right.initiative - left.initiative);
 }
 
 function CharacterPresetPicker({
@@ -1295,11 +1298,19 @@ export default function CampaignDetailScreen() {
       const identity = onlineIdentity ?? await ensureSupabaseIdentity();
       if (!onlineIdentity) setOnlineIdentity(identity);
       const previousLobby = await restoreLastOnlineLobby(identity);
-      const snapshot = previousLobby?.role === 'dm' &&
+      const canReuseLobby = previousLobby?.role === 'dm' &&
         previousLobby.owner_id === identity.userId &&
         previousLobby.encounter_id === encounter.id &&
         previousLobby.status === 'open' &&
-        previousLobby.initiative_schema_version === 1
+        previousLobby.initiative_schema_version === 1 &&
+        await isLobbyCurrentForEncounter(
+          previousLobby.lobby_id,
+          encounter,
+          activeCharacters,
+          encounter.allies ?? [],
+          encounter.backgroundId ?? null,
+        );
+      const snapshot = canReuseLobby && previousLobby
         ? previousLobby
         : await createOnlineCombatLobby(
             identity,
@@ -1448,26 +1459,27 @@ export default function CampaignDetailScreen() {
   const combatCharacterResults = new Map(
     (campaign?.combat?.characters ?? []).map((character) => [character.id, character]),
   );
-  const initiativeOrder: InitiativeEntry[] = campaign?.combat
+  const combatPartyCharacters = activeCharacters.filter(
+    (character) => !combatParticipantIds || combatParticipantIds.has(character.id),
+  );
+  const initiativeEntries: InitiativeEntry[] = campaign?.combat
     ? [
-        ...activeCharacters
-          .filter((character) => !combatParticipantIds || combatParticipantIds.has(character.id))
-          .map((character) => {
-            const result = combatCharacterResults.get(character.id);
-            return {
-              id: character.id,
-              name: character.name,
-              initiative: result?.initiativeTotal ?? character.initiative,
-              initiativeRoll: result?.initiativeRoll,
-              initiativeBonus: result?.initiativeBonus,
-              initiativeTotal: result?.initiativeTotal,
-              className: character.className,
-              race: character.race,
-              portraitUri: character.portraitUri,
-              portraitPresetId: character.portraitPresetId,
-              armorClass: result?.armorClass ?? character.armorClass,
-            };
-          }),
+        ...combatPartyCharacters.map((character) => {
+          const result = combatCharacterResults.get(character.id);
+          return {
+            id: character.id,
+            name: character.name,
+            initiative: result?.initiativeTotal ?? character.initiative,
+            initiativeRoll: result?.initiativeRoll,
+            initiativeBonus: result?.initiativeBonus,
+            initiativeTotal: result?.initiativeTotal,
+            className: character.className,
+            race: character.race,
+            portraitUri: character.portraitUri,
+            portraitPresetId: character.portraitPresetId,
+            armorClass: result?.armorClass ?? character.armorClass,
+          };
+        }),
         ...(campaign.combat.allies ?? []).map((ally) => ({
           id: ally.id,
           name: ally.name,
@@ -1484,8 +1496,12 @@ export default function CampaignDetailScreen() {
           currentHp: ally.currentHp,
         })),
         ...(campaign.combat.enemies ?? []),
-      ].sort((left, right) => right.initiative - left.initiative)
-    : getInitiativeOrder(activeCharacters);
+      ]
+    : activeCharacters;
+  const initiativeOrder = sortCampaignCombatants(
+    initiativeEntries,
+    new Set(combatPartyCharacters.map((character) => character.id)),
+  );
   const currentCharacter = initiativeOrder.find(
     (character) => character.id === campaign?.combat?.currentCharacterId,
   );
@@ -4201,11 +4217,15 @@ export default function CampaignDetailScreen() {
                     return (
                       <View
                         key={character.id}
+                        style={styles.initiativeFrameWrapper}
+                      >
+                      <View
                         style={[
                           styles.initiativeRow,
                           isCurrentTurn && styles.currentInitiativeRow,
                         ]}
                       >
+                      <View style={styles.initiativeRowContent}>
                         <Text style={styles.initiativeRank}>{index + 1}</Text>
                         {portraitSource ? (
                           <Image
@@ -4310,6 +4330,18 @@ export default function CampaignDetailScreen() {
                             <CombatIcon name="ellipsis" size={20} color="#DCC9A9" />
                           </Pressable>
                         )}
+                      </View>
+                      {isCurrentTurn && (
+                        <View pointerEvents="none" style={styles.activeTurnFrameLayer}>
+                          <Image
+                            accessible={false}
+                            resizeMode="stretch"
+                            source={ACTIVE_TURN_FRAME}
+                            style={styles.activeTurnFrame}
+                          />
+                        </View>
+                      )}
+                      </View>
                       </View>
                     );
                   })}
@@ -6943,29 +6975,51 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   initiativeListContent: {
-    gap: 7,
+    gap: Platform.OS === 'ios' ? 10 : 7,
     paddingTop: 2,
     paddingBottom: 16,
   },
   initiativeRow: {
-    minHeight: 80,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
+    width: '100%',
+    minHeight: Platform.OS === 'ios' ? 60 : 80,
     borderWidth: 1,
     borderColor: 'rgba(174, 139, 84, 0.48)',
     borderRadius: 7,
     backgroundColor: 'rgba(3, 14, 23, 0.88)',
   },
   currentInitiativeRow: {
-    borderColor: '#E9BC60',
     backgroundColor: 'rgba(49, 38, 20, 0.92)',
-    shadowColor: '#F1B844',
-    shadowOpacity: 0.38,
-    shadowRadius: 7,
-    shadowOffset: { width: 0, height: 0 },
+    overflow: 'visible',
+    position: 'relative',
+  },
+  initiativeRowContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Platform.OS === 'ios' ? 7 : 9,
+    paddingHorizontal: Platform.OS === 'ios' ? 6 : 8,
+    paddingVertical: Platform.OS === 'ios' ? 3 : 8,
+    position: 'relative',
+    zIndex: 3,
+    elevation: 3,
+  },
+  activeTurnFrame: {
+    width: '100%',
+    height: '100%',
+  },
+  initiativeFrameWrapper: {
+    alignSelf: 'stretch',
+    marginHorizontal: 24,
+    position: 'relative',
+    overflow: 'visible',
+  },
+  activeTurnFrameLayer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? '-32%' : '-25%',
+    right: Platform.OS === 'ios' ? -4 : -10,
+    bottom: Platform.OS === 'ios' ? '-32%' : '-25%',
+    left: Platform.OS === 'ios' ? -10 : -22,
+    zIndex: 4,
     elevation: 4,
   },
   initiativeRank: {
@@ -6977,8 +7031,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   initiativePortrait: {
-    width: 54,
-    height: 58,
+    width: Platform.OS === 'ios' ? 32 : 54,
+    height: Platform.OS === 'ios' ? 32 : 58,
     flexShrink: 0,
     borderWidth: 1,
     borderColor: '#B18A4E',
@@ -6986,8 +7040,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#0B1721',
   },
   initiativePortraitFallback: {
-    width: 54,
-    height: 58,
+    width: Platform.OS === 'ios' ? 32 : 54,
+    height: Platform.OS === 'ios' ? 32 : 58,
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
@@ -6999,7 +7053,7 @@ const styles = StyleSheet.create({
   initiativePortraitInitial: {
     color: '#E8B95F',
     fontFamily: 'serif',
-    fontSize: 24,
+    fontSize: Platform.OS === 'ios' ? 17 : 24,
   },
   initiativeCombatantInfo: {
     flex: 1,
@@ -7032,30 +7086,30 @@ const styles = StyleSheet.create({
   initiativeName: {
     color: '#F1E4D2',
     fontFamily: 'serif',
-    fontSize: 17,
+    fontSize: Platform.OS === 'ios' ? 13 : 17,
     fontWeight: '600',
   },
   initiativeClass: {
     color: '#BDB4A8',
     fontFamily: 'serif',
-    fontSize: 12,
+    fontSize: Platform.OS === 'ios' ? 10 : 12,
     marginTop: 1,
   },
   initiativeCurrentLabel: {
     color: '#EBC46D',
     fontFamily: 'serif',
-    fontSize: 12,
-    marginTop: 2,
+    fontSize: Platform.OS === 'ios' ? 9 : 12,
+    marginTop: Platform.OS === 'ios' ? 0 : 2,
   },
   initiativeCalculation: {
     color: '#C5B9A8',
     fontFamily: 'serif',
-    fontSize: 11,
-    marginTop: 2,
+    fontSize: Platform.OS === 'ios' ? 9 : 11,
+    marginTop: Platform.OS === 'ios' ? 0 : 2,
   },
   initiativeScoreBox: {
-    minWidth: 40,
-    minHeight: 46,
+    minWidth: Platform.OS === 'ios' ? 32 : 40,
+    minHeight: Platform.OS === 'ios' ? 32 : 46,
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
@@ -7066,12 +7120,12 @@ const styles = StyleSheet.create({
   initiativeScore: {
     color: '#F1D18D',
     fontFamily: 'serif',
-    fontSize: 25,
+    fontSize: Platform.OS === 'ios' ? 19 : 25,
     fontWeight: '600',
   },
   combatCharacterMenuButton: {
     width: 32,
-    height: 40,
+    height: Platform.OS === 'ios' ? 32 : 40,
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',

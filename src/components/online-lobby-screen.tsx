@@ -8,6 +8,7 @@ import { SourceSans3_400Regular } from '@expo-google-fonts/source-sans-3/400Regu
 import { SourceSans3_600SemiBold } from '@expo-google-fonts/source-sans-3/600SemiBold';
 import { SourceSans3_700Bold } from '@expo-google-fonts/source-sans-3/700Bold';
 import { SymbolView } from 'expo-symbols';
+import Slider from '@react-native-community/slider';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -23,6 +24,7 @@ import {
   TextInput,
   View,
   useWindowDimensions,
+  type ImageSourcePropType,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -31,7 +33,7 @@ import {
   claimOnlineLobbyCharacter,
   closeOnlineCombatLobby,
   activateOnlineCombatReinforcement,
-  advanceOnlineCombatRound,
+  advanceOnlineCombatTurn,
   joinOnlineCombatLobby,
   leaveOnlineCombatLobby,
   loadOnlineLobbySnapshot,
@@ -40,6 +42,8 @@ import {
   rollPlayerInitiative,
   submitDmPartyInitiative,
   startOnlineCombat,
+  setOnlineParticipantHp,
+  reviveOnlineParticipant,
   submitDmInitiative,
   submitPlayerInitiative,
   subscribeToOnlineCombatLobby,
@@ -47,9 +51,16 @@ import {
   type OnlineInitiativeResult,
   type OnlineLobbyCharacter,
   type OnlineLobbySnapshot,
+  PORTRAIT_URL_PREFIX,
 } from '@/storage/online-lobbies';
 
-function getCharacterPortrait(presetId: string | null): number | undefined {
+const ACTIVE_TURN_FRAME = require('../../assets/images/active-turn-frame-wide.png');
+const DEFEATED_FRAME = require('../../assets/images/defeated-frame.png');
+
+function getCharacterPortrait(presetId: string | null): ImageSourcePropType | undefined {
+  if (presetId?.startsWith(PORTRAIT_URL_PREFIX)) {
+    return { uri: presetId.slice(PORTRAIT_URL_PREFIX.length) };
+  }
   switch (presetId) {
     case 'dragonborn-wizard':
       return require('../../assets/images/character-presets/dragonborn-wizard.jpg');
@@ -68,7 +79,10 @@ function getCharacterPortrait(presetId: string | null): number | undefined {
   }
 }
 
-function getCombatantPortrait(imageId: string | null): number | undefined {
+function getCombatantPortrait(imageId: string | null): ImageSourcePropType | undefined {
+  if (imageId?.startsWith(PORTRAIT_URL_PREFIX)) {
+    return { uri: imageId.slice(PORTRAIT_URL_PREFIX.length) };
+  }
   switch (imageId) {
     case 'bandit':
       return require('../../assets/images/encounter-enemies/bandit.jpg');
@@ -149,6 +163,7 @@ type OnlineCombatInitiativeRow = {
   visibleMemberCount: number;
   currentHp: number | null;
   maxHp: number | null;
+  isDefeated?: boolean;
   className?: string;
   race?: string | null;
   playerName?: string;
@@ -236,6 +251,7 @@ export default function OnlineLobbyScreen() {
   const [isLeaveConfirmationVisible, setIsLeaveConfirmationVisible] = useState(false);
   const [isDmLeaveConfirmationVisible, setIsDmLeaveConfirmationVisible] = useState(false);
   const [hoveredControl, setHoveredControl] = useState<string | null>(null);
+  const [dmListTab, setDmListTab] = useState<'enemies' | 'npcs' | 'reinforcements'>('enemies');
   const { width } = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
 
@@ -466,12 +482,40 @@ export default function OnlineLobbyScreen() {
     }
   }
 
-  async function handleAdvanceCombatRound() {
+  async function handleSetParticipantHp(participantId: string, currentHp: number) {
     if (!identity || !lobby || isBusy || lobby.role !== 'dm' || !lobby.combat_started) return;
     setIsBusy(true);
     setErrorMessage(null);
     try {
-      await advanceOnlineCombatRound(identity, lobby.lobby_id);
+      await setOnlineParticipantHp(identity, lobby.lobby_id, participantId, currentHp);
+      setLobby(await loadOnlineLobbySnapshot(identity, lobby.lobby_id));
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Hit points could not be saved.');
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleReviveParticipant(participantId: string, hp: number) {
+    if (!identity || !lobby || isBusy || lobby.role !== 'dm' || !lobby.combat_started) return;
+    setIsBusy(true);
+    setErrorMessage(null);
+    try {
+      await reviveOnlineParticipant(identity, lobby.lobby_id, participantId, hp);
+      setLobby(await loadOnlineLobbySnapshot(identity, lobby.lobby_id));
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Combatant could not be revived.');
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleAdvanceCombatTurn() {
+    if (!identity || !lobby || isBusy || lobby.role !== 'dm' || !lobby.combat_started) return;
+    setIsBusy(true);
+    setErrorMessage(null);
+    try {
+      await advanceOnlineCombatTurn(identity, lobby.lobby_id);
       setLobby(await loadOnlineLobbySnapshot(identity, lobby.lobby_id));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Combat round could not advance.');
@@ -561,6 +605,23 @@ export default function OnlineLobbyScreen() {
   const activeDmParticipants = dmParticipants.filter(
     (participant) => !participant.members.every((member) => isEndedStatus(member.status)),
   );
+  const reinforcementDmParticipants = activeDmParticipants.filter(
+    (participant) => participant.arrival_mode === 'dm' &&
+      participant.members.some((member) => member.status === 'scheduled'),
+  );
+  const regularDmParticipants = activeDmParticipants.filter(
+    (participant) => !reinforcementDmParticipants.includes(participant),
+  );
+  const dmTabParticipants = {
+    enemies: regularDmParticipants.filter(
+      (participant) => participant.participant_type !== 'ally',
+    ),
+    npcs: regularDmParticipants.filter(
+      (participant) => participant.participant_type === 'ally',
+    ),
+    reinforcements: reinforcementDmParticipants,
+  };
+  const visibleDmParticipants = dmTabParticipants[dmListTab];
   const endedDmParticipants = dmParticipants.filter(
     (participant) => participant.members.every((member) => isEndedStatus(member.status)),
   );
@@ -643,17 +704,23 @@ export default function OnlineLobbyScreen() {
             visibleMemberCount: participant.visible_member_count,
             currentHp: participant.current_hp ?? null,
             maxHp: participant.max_hp ?? null,
+            isDefeated: participant.is_defeated === true,
           };
         }),
       ].sort((left, right) => {
         if (left.total !== null && right.total !== null) {
-          return right.total - left.total ||
-            left.sortOrder - right.sortOrder ||
-            left.key.localeCompare(right.key);
+          const initiativeDifference = right.total - left.total;
+          if (initiativeDifference !== 0) return initiativeDifference;
         }
-        if (left.total !== null) return -1;
-        if (right.total !== null) return 1;
-        return left.sortOrder - right.sortOrder || left.key.localeCompare(right.key);
+        if (left.total !== right.total) {
+          if (left.total !== null) return -1;
+          if (right.total !== null) return 1;
+        }
+        const partyPriority =
+          Number(right.type === 'character') - Number(left.type === 'character');
+        return partyPriority ||
+          left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) ||
+          left.key.localeCompare(right.key);
       }) satisfies OnlineCombatInitiativeRow[]
     : [];
   const sceneBackground = (lobby ? getCombatSceneBackground(lobby.background_id) : undefined) ??
@@ -864,9 +931,14 @@ export default function OnlineLobbyScreen() {
                 {isCombatTrackerVisible && lobby ? (
                   <OnlineCombatTracker
                     round={lobby.current_round}
+                    currentTurnKey={lobby.current_turn_key}
                     rows={combatInitiativeRows}
                     errorMessage={errorMessage}
                     width={width}
+                    dmParticipants={lobby.role === 'dm' ? dmParticipants : undefined}
+                    isBusy={isBusy}
+                    onSetHp={handleSetParticipantHp}
+                    onRevive={handleReviveParticipant}
                   />
                 ) : (
                   <>
@@ -966,7 +1038,7 @@ export default function OnlineLobbyScreen() {
                         <Pressable
                           accessibilityRole="button"
                           disabled={isBusy}
-                          onPress={() => void handleAdvanceCombatRound()}
+                          onPress={() => void handleAdvanceCombatTurn()}
                           style={({ pressed }) => [
                             styles.advanceRoundButton,
                             isBusy && styles.disabled,
@@ -974,7 +1046,7 @@ export default function OnlineLobbyScreen() {
                           ]}
                         >
                           <Text style={styles.advanceRoundButtonText}>
-                            {isBusy ? 'Please wait…' : `Advance to Round ${lobby.current_round + 1}`}
+                            {isBusy ? 'Please wait…' : 'Next Turn'}
                           </Text>
                         </Pressable>
                       ) : (
@@ -982,7 +1054,14 @@ export default function OnlineLobbyScreen() {
                       )}
                     </View>
                     {combatInitiativeRows.map((participant) => (
-                      <View key={participant.key} style={styles.combatRow}>
+                      <View
+                        key={participant.key}
+                        style={[
+                          styles.combatRow,
+                          participant.key === lobby.current_turn_key &&
+                            styles.combatRowCurrentTurn,
+                        ]}
+                      >
                         <ParticipantPortrait
                           name={participant.name}
                           image={participant.type === 'character'
@@ -991,6 +1070,9 @@ export default function OnlineLobbyScreen() {
                           large
                         />
                         <View style={styles.participantInfo}>
+                          {participant.key === lobby.current_turn_key && (
+                            <Text style={styles.currentTurnRowLabel}>CURRENT TURN</Text>
+                          )}
                           <Text style={styles.participantName}>{participant.name}</Text>
                           <Text style={styles.participantSubtext}>
                             {participant.type === 'character'
@@ -1158,8 +1240,35 @@ export default function OnlineLobbyScreen() {
                         </Pressable>
                       </View>
                     </View>
+                    <View style={styles.dmListTabs}>
+                      {([
+                        ['enemies', 'Enemies'],
+                        ['npcs', 'NPCs'],
+                        ['reinforcements', 'Reinforcements'],
+                      ] as const).map(([tab, label]) => (
+                        <Pressable
+                          key={tab}
+                          accessibilityRole="tab"
+                          accessibilityState={{ selected: dmListTab === tab }}
+                          onPress={() => setDmListTab(tab)}
+                          style={[
+                            styles.dmListTab,
+                            dmListTab === tab && styles.dmListTabActive,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.dmListTabText,
+                              dmListTab === tab && styles.dmListTabTextActive,
+                            ]}
+                          >
+                            {label} · {dmTabParticipants[tab].length}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
                     <View style={styles.enemyGrid}>
-                      {activeDmParticipants.map((participant) => (
+                      {visibleDmParticipants.map((participant) => (
                         <View key={participant.initiative_key}>
                           <DmParticipantCard
                             participant={participant}
@@ -1222,6 +1331,13 @@ export default function OnlineLobbyScreen() {
                         </View>
                       ))}
                     </View>
+                    {dmParticipants.length > 0 && visibleDmParticipants.length === 0 && (
+                      <Text style={styles.hint}>
+                        {dmListTab === 'reinforcements'
+                          ? 'No undecided reinforcements.'
+                          : `No ${dmListTab === 'npcs' ? 'NPCs' : 'enemies'} in this encounter.`}
+                      </Text>
+                    )}
                     {endedDmParticipants.length > 0 && (
                       <View style={styles.inactiveSection}>
                         <Text style={styles.inactiveTitle}>DEFEATED &amp; INACTIVE</Text>
@@ -1283,7 +1399,7 @@ export default function OnlineLobbyScreen() {
                     <Pressable
                       accessibilityRole="button"
                       disabled={isBusy}
-                      onPress={() => void handleAdvanceCombatRound()}
+                      onPress={() => void handleAdvanceCombatTurn()}
                       style={({ pressed }) => [
                         styles.combatNextRoundButton,
                         isBusy && styles.disabled,
@@ -1293,9 +1409,21 @@ export default function OnlineLobbyScreen() {
                       <View style={styles.buttonContent}>
                         <LobbyIcon name="swords" size={18} color="#17130B" />
                         <Text style={styles.combatNextRoundText}>
-                          {isBusy ? 'Please wait…' : `Advance to Round ${lobby.current_round + 1}`}
+                          {isBusy ? 'Please wait…' : 'Next Turn'}
                         </Text>
                       </View>
+                    </Pressable>
+                  )}
+                  {lobby.role === 'dm' && (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {}}
+                      style={({ pressed }) => [
+                        styles.combatFinishButton,
+                        pressed && styles.buttonPressed,
+                      ]}
+                    >
+                      <Text style={styles.combatFinishText}>Finish Combat</Text>
                     </Pressable>
                   )}
                   <Pressable
@@ -1582,15 +1710,35 @@ export default function OnlineLobbyScreen() {
 
 function OnlineCombatTracker({
   round,
+  currentTurnKey,
   rows,
   errorMessage,
   width,
+  dmParticipants,
+  isBusy = false,
+  onSetHp,
+  onRevive,
 }: {
   round: number;
   rows: OnlineCombatInitiativeRow[];
   errorMessage: string | null;
   width: number;
+  currentTurnKey: string | null;
+  dmParticipants?: OnlineDmParticipant[];
+  isBusy?: boolean;
+  onSetHp?: (participantId: string, currentHp: number) => void;
+  onRevive?: (participantId: string, hp: number) => void;
 }) {
+  const [hpKey, setHpKey] = useState<string | null>(null);
+  const [amount, setAmount] = useState('1');
+  const hpParticipant = hpKey
+    ? dmParticipants?.find((participant) => participant.initiative_key === hpKey)
+    : undefined;
+  const parsedAmount = /^\d+$/.test(amount) ? Math.min(Number(amount), 9999) : 0;
+  const sliderMax = Math.max(
+    1,
+    ...(hpParticipant?.members.map((member) => member.max_hp) ?? [1]),
+  );
   return (
     <View style={styles.combatTrackerContent}>
       <View style={styles.combatRoundPanel}>
@@ -1605,14 +1753,26 @@ function OnlineCombatTracker({
         <Text style={styles.combatInitiativeTitle}>INITIATIVE ORDER</Text>
         <View style={styles.combatSectionDivider} />
       </View>
-      {rows.map((participant, index) => {
+      {rows.map((participant) => {
         const isEnemy = participant.type === 'enemy';
+        const isCurrentTurn = participant.key === currentTurnKey;
         const portrait = participant.type === 'character'
           ? getCharacterPortrait(participant.portraitPresetId)
           : participant.type === 'ally'
             ? getCharacterPortrait(participant.portraitPresetId) ??
               getCombatantPortrait(participant.imageId)
             : getCombatantPortrait(participant.imageId);
+        const dmParticipant = dmParticipants?.find(
+          (item) => item.initiative_key === participant.key,
+        );
+        const dmLiveMembers = dmParticipant?.members.filter(
+          (member) => member.status === 'active',
+        ) ?? [];
+        const dmHpText = dmParticipant && dmLiveMembers.length > 0
+          ? `HP ${dmLiveMembers.reduce((sum, member) => sum + member.current_hp, 0)}/${
+              dmLiveMembers.reduce((sum, member) => sum + member.max_hp, 0)
+            }`
+          : null;
         const details = [
           ...(participant.type === 'character'
             ? [
@@ -1621,42 +1781,63 @@ function OnlineCombatTracker({
               participant.playerName,
             ]
             : [isEnemy ? 'Enemy' : 'Ally']),
-          participant.currentHp !== null && participant.maxHp !== null
-            ? `HP ${participant.currentHp} / ${participant.maxHp}`
-            : null,
           participant.visibleMemberCount > 1
             ? `${participant.visibleMemberCount} members`
             : null,
         ].filter(Boolean).join(' · ');
+        const canEditHp = Boolean(onSetHp && participant.type !== 'character' && dmParticipant);
         return (
-          <View
+          <Pressable
             key={participant.key}
+            accessibilityRole={canEditHp ? 'button' : undefined}
+            accessibilityLabel={canEditHp ? `Edit hit points for ${participant.name}` : undefined}
+            disabled={!canEditHp}
+            onPress={() => {
+              setAmount('1');
+              setHpKey(participant.key);
+            }}
+            style={styles.onlineCombatantFrameWrapper}
+          >
+          <View
             style={[
               styles.onlineCombatantCard,
+              width < 520 && styles.onlineCombatantCardShort,
+              isCurrentTurn && styles.onlineCombatantCurrentTurn,
+            ]}
+          >
+          <View
+            style={[
+              styles.onlineCombatantCardContent,
               width < 520 && styles.onlineCombatantCardCompact,
-              index === 0 && styles.onlineCombatantFirst,
+              participant.isDefeated && styles.onlineCombatantDefeatedContent,
             ]}
           >
             <ParticipantPortrait
               name={participant.name}
               image={portrait}
               large
+              compact={width < 520}
             />
             <View style={styles.onlineCombatantInfo}>
-              {index === 0 && (
-                <Text style={styles.firstInOrderLabel}>FIRST IN ORDER</Text>
+              {isCurrentTurn && width >= 520 && (
+                <Text style={styles.currentTurnRowLabel}>CURRENT TURN</Text>
               )}
               <Text
+                numberOfLines={width < 520 ? 1 : undefined}
                 style={[
                   styles.onlineCombatantName,
+                  width < 520 && styles.onlineCombatantNameCompact,
                   isEnemy && styles.onlineCombatantEnemyName,
                 ]}
               >
                 {participant.name}
+                {dmHpText && <Text style={styles.onlineCombatantHp}>{`  ${dmHpText}`}</Text>}
               </Text>
               <Text
+                numberOfLines={width < 520 ? 1 : undefined}
                 style={[
                   styles.onlineCombatantDetails,
+                  width < 520 && styles.onlineCombatantDetailsCompact,
                   isEnemy && styles.onlineCombatantEnemyLabel,
                 ]}
               >
@@ -1669,27 +1850,89 @@ function OnlineCombatTracker({
                 width < 520 && styles.onlineCombatantCardCompactStats,
               ]}
             >
-              <View style={styles.onlineCombatantStat}>
-                <Text style={styles.onlineCombatantStatValue}>
+              <View
+                style={[
+                  styles.onlineCombatantStat,
+                  width < 520 && styles.onlineCombatantStatCompact,
+                ]}
+              >
+                {width < 520 && (
+                  <SymbolView
+                    name={{ ios: 'figure.run', android: 'directions_run', web: 'directions_run' }}
+                    size={18}
+                    tintColor="#E8B95F"
+                  />
+                )}
+                <Text
+                  style={[
+                    styles.onlineCombatantStatValue,
+                    width < 520 && styles.onlineCombatantStatValueCompact,
+                  ]}
+                >
                   {participant.total ?? '—'}
                 </Text>
-                <Text style={styles.onlineCombatantStatLabel}>INIT</Text>
-                {participant.rawRoll !== null && participant.bonus !== null && (
+                {width >= 520 && (
+                  <Text style={styles.onlineCombatantStatLabel}>INIT</Text>
+                )}
+                {width >= 520 && participant.rawRoll !== null &&
+                  participant.bonus !== null && (
                   <Text style={styles.onlineCombatantCalculation}>
                     {participant.rawRoll} {participant.bonus >= 0 ? '+' : '−'}{' '}
                     {Math.abs(participant.bonus)}
                   </Text>
                 )}
               </View>
-              <View style={styles.onlineCombatantStatDivider} />
-              <View style={styles.onlineCombatantStat}>
-                <Text style={styles.onlineCombatantStatValue}>
+              <View
+                style={[
+                  styles.onlineCombatantStatDivider,
+                  width < 520 && styles.onlineCombatantStatDividerCompact,
+                ]}
+              />
+              <View
+                style={[
+                  styles.onlineCombatantStat,
+                  width < 520 && styles.onlineCombatantStatCompact,
+                ]}
+              >
+                {width < 520 && (
+                  <SymbolView
+                    name={{ ios: 'shield', android: 'shield', web: 'shield' }}
+                    size={18}
+                    tintColor="#E8B95F"
+                  />
+                )}
+                <Text
+                  style={[
+                    styles.onlineCombatantStatValue,
+                    width < 520 && styles.onlineCombatantStatValueCompact,
+                  ]}
+                >
                   {participant.armorClass ?? '—'}
                 </Text>
-                <Text style={styles.onlineCombatantStatLabel}>AC</Text>
+                {width >= 520 && (
+                  <Text style={styles.onlineCombatantStatLabel}>AC</Text>
+                )}
               </View>
             </View>
           </View>
+          {(isCurrentTurn || participant.isDefeated) && (
+            <View
+              pointerEvents="none"
+              style={[
+                styles.activeTurnFrameLayer,
+                width < 520 && styles.activeTurnFrameLayerCompact,
+              ]}
+            >
+              <Image
+                accessible={false}
+                resizeMode="stretch"
+                source={participant.isDefeated ? DEFEATED_FRAME : ACTIVE_TURN_FRAME}
+                style={styles.activeTurnFrame}
+              />
+            </View>
+          )}
+          </View>
+          </Pressable>
         );
       })}
       {rows.length === 0 && (
@@ -1702,6 +1945,138 @@ function OnlineCombatTracker({
           {errorMessage}
         </Text>
       )}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={Boolean(hpParticipant)}
+        onRequestClose={() => setHpKey(null)}
+      >
+        <View style={styles.hpModalBackdrop}>
+          <View style={styles.hpModalPanel}>
+            <Text style={styles.hpModalTitle}>{hpParticipant?.name}</Text>
+            <View style={styles.hpAmountRow}>
+              <Text style={styles.hpAmountLabel}>Amount</Text>
+              <TextInput
+                accessibilityLabel="Damage or healing amount"
+                keyboardType="number-pad"
+                maxLength={4}
+                onChangeText={setAmount}
+                selectTextOnFocus
+                style={styles.hpAmountInput}
+                value={amount}
+              />
+            </View>
+            <Slider
+              accessibilityLabel="Damage or healing amount slider"
+              maximumTrackTintColor="#4A4034"
+              maximumValue={sliderMax}
+              minimumTrackTintColor="#E8B95F"
+              minimumValue={0}
+              onValueChange={(value) => setAmount(String(Math.round(value)))}
+              step={1}
+              style={styles.hpSlider}
+              thumbTintColor="#E8B95F"
+              value={Math.min(parsedAmount, sliderMax)}
+            />
+            <ScrollView style={styles.hpMemberList}>
+              {hpParticipant?.members.filter((member) =>
+                member.status === 'active' || member.status === 'defeated',
+              ).map((member) => {
+                const percent = Math.max(
+                  0,
+                  Math.min(100, (member.current_hp / member.max_hp) * 100),
+                );
+                const isDefeated = member.status === 'defeated';
+                return (
+                  <View key={member.participant_id} style={styles.hpMemberRow}>
+                    <View style={styles.hpMemberHeader}>
+                      <Text style={[styles.hpMemberName, isDefeated && styles.hpDefeatedText]}>
+                        {member.name}
+                      </Text>
+                      <Text style={[styles.hpMemberValue, isDefeated && styles.hpDefeatedText]}>
+                        {isDefeated ? 'DEFEATED' : `${member.current_hp} / ${member.max_hp}`}
+                      </Text>
+                    </View>
+                    <View style={styles.hpBarTrack}>
+                      <View
+                        style={[
+                          styles.hpBarFill,
+                          { width: `${percent}%` },
+                          percent <= 25 && styles.hpBarFillLow,
+                        ]}
+                      />
+                    </View>
+                    <View style={styles.hpButtonRow}>
+                      {isDefeated ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={isBusy}
+                          onPress={() => onRevive?.(
+                            member.participant_id,
+                            Math.min(Math.max(parsedAmount, 1), member.max_hp),
+                          )}
+                          style={({ pressed }) => [
+                            styles.hpHealButton,
+                            isBusy && styles.disabled,
+                            pressed && styles.buttonPressed,
+                          ]}
+                        >
+                          <Text style={styles.hpButtonText}>
+                            Revive with {Math.min(Math.max(parsedAmount, 1), member.max_hp)} HP
+                          </Text>
+                        </Pressable>
+                      ) : (
+                      <>
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={isBusy || parsedAmount === 0 || member.current_hp === 0}
+                        onPress={() => onSetHp?.(
+                          member.participant_id,
+                          member.current_hp - parsedAmount,
+                        )}
+                        style={({ pressed }) => [
+                          styles.hpDamageButton,
+                          (isBusy || parsedAmount === 0 || member.current_hp === 0) &&
+                            styles.disabled,
+                          pressed && styles.buttonPressed,
+                        ]}
+                      >
+                        <Text style={styles.hpButtonText}>− Damage</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={isBusy || parsedAmount === 0 ||
+                          member.current_hp >= member.max_hp}
+                        onPress={() => onSetHp?.(
+                          member.participant_id,
+                          member.current_hp + parsedAmount,
+                        )}
+                        style={({ pressed }) => [
+                          styles.hpHealButton,
+                          (isBusy || parsedAmount === 0 ||
+                            member.current_hp >= member.max_hp) && styles.disabled,
+                          pressed && styles.buttonPressed,
+                        ]}
+                      >
+                        <Text style={styles.hpButtonText}>+ Heal</Text>
+                      </Pressable>
+                      </>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setHpKey(null)}
+              style={({ pressed }) => [styles.hpCloseButton, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.hpCloseText}>Done</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1710,20 +2085,30 @@ function ParticipantPortrait({
   name,
   image,
   large = false,
+  compact = false,
 }: {
   name: string;
-  image: number | undefined;
+  image: ImageSourcePropType | undefined;
   large?: boolean;
+  compact?: boolean;
 }) {
   return image ? (
     <Image
       accessibilityLabel={`${name} portrait`}
       source={image}
       resizeMode="cover"
-      style={large ? styles.largePortrait : styles.portrait}
+      style={[
+        large ? styles.largePortrait : styles.portrait,
+        compact && styles.compactPortrait,
+      ]}
     />
   ) : (
-    <View style={large ? styles.largeInitial : styles.portraitInitial}>
+    <View
+      style={[
+        large ? styles.largeInitial : styles.portraitInitial,
+        compact && styles.compactPortrait,
+      ]}
+    >
       <Text style={styles.portraitInitialText}>
         {name.trim().charAt(0).toUpperCase() || '?'}
       </Text>
@@ -3121,6 +3506,177 @@ const styles = StyleSheet.create({
     fontFamily: 'Cinzel_400Regular',
     fontSize: 14,
   },
+  onlineCombatantHp: {
+    color: '#F2D182',
+    fontFamily: 'SourceSans3_600SemiBold',
+    fontSize: 13,
+  },
+  onlineCombatantDefeatedContent: {
+    opacity: 0.45,
+  },
+  hpSlider: {
+    width: '100%',
+    height: 36,
+  },
+  hpModalBackdrop: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+  },
+  hpModalPanel: {
+    width: '100%',
+    maxWidth: 460,
+    maxHeight: '80%',
+    gap: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 8,
+    backgroundColor: '#0A141D',
+  },
+  hpModalTitle: {
+    color: '#F3E9DA',
+    fontFamily: 'Cinzel_600SemiBold',
+    fontSize: 22,
+    textAlign: 'center',
+  },
+  hpAmountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  hpAmountLabel: {
+    color: '#D7B66C',
+    fontFamily: 'Cinzel_600SemiBold',
+    fontSize: 14,
+  },
+  hpAmountInput: {
+    minWidth: 90,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#C69A50',
+    borderRadius: 6,
+    backgroundColor: 'rgba(3, 13, 22, 0.95)',
+    color: '#F2D182',
+    fontFamily: 'Cinzel_600SemiBold',
+    fontSize: 20,
+    textAlign: 'center',
+  },
+  hpMemberList: {
+    flexGrow: 0,
+  },
+  hpMemberRow: {
+    gap: 6,
+    marginBottom: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(198, 154, 80, 0.4)',
+    borderRadius: 6,
+    backgroundColor: 'rgba(3, 13, 22, 0.9)',
+  },
+  hpMemberHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  hpMemberName: {
+    flex: 1,
+    color: '#F3E9DA',
+    fontFamily: 'SourceSans3_600SemiBold',
+    fontSize: 16,
+  },
+  hpMemberValue: {
+    color: '#F2D182',
+    fontFamily: 'Cinzel_600SemiBold',
+    fontSize: 15,
+  },
+  hpDefeatedText: {
+    color: '#E78878',
+  },
+  hpBarTrack: {
+    height: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(198, 154, 80, 0.5)',
+    borderRadius: 6,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+  },
+  hpBarFill: {
+    height: '100%',
+    backgroundColor: '#4FA860',
+  },
+  hpBarFillLow: {
+    backgroundColor: '#C9473A',
+  },
+  hpButtonRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  hpDamageButton: {
+    flex: 1,
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    backgroundColor: '#8E3228',
+  },
+  hpHealButton: {
+    flex: 1,
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    backgroundColor: '#2F7A45',
+  },
+  hpButtonText: {
+    color: '#FFF4DE',
+    fontFamily: 'SourceSans3_700Bold',
+    fontSize: 15,
+  },
+  hpCloseButton: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    backgroundColor: '#C69A50',
+  },
+  hpCloseText: {
+    color: '#17120A',
+    fontFamily: 'SourceSans3_700Bold',
+    fontSize: 16,
+  },
+  dmListTabs: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  dmListTab: {
+    flex: 1,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(198, 154, 80, 0.45)',
+    borderRadius: 5,
+    backgroundColor: 'rgba(3, 13, 22, 0.8)',
+  },
+  dmListTabActive: {
+    borderColor: '#E8B95F',
+    backgroundColor: 'rgba(167, 122, 49, 0.28)',
+  },
+  dmListTabText: {
+    color: '#C8BDAD',
+    fontFamily: 'Cinzel_600SemiBold',
+    fontSize: 13,
+  },
+  dmListTabTextActive: {
+    color: '#F2D182',
+  },
   dmActionBar: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -3399,10 +3955,33 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: 'rgba(5, 15, 24, 0.9)',
   },
+  combatRowCurrentTurn: {
+    backgroundColor: 'rgba(53, 39, 17, 0.96)',
+    position: 'relative',
+  },
+  activeTurnFrame: {
+    width: '100%',
+    height: '100%',
+  },
+  activeTurnFrameLayer: {
+    position: 'absolute',
+    top: '-25%',
+    right: -10,
+    bottom: '-25%',
+    left: -22,
+    zIndex: 4,
+    elevation: 4,
+  },
+  currentTurnRowLabel: {
+    color: '#F5CF75',
+    fontFamily: 'SourceSans3_700Bold',
+    fontSize: 11,
+    letterSpacing: 1.4,
+    textShadowColor: 'rgba(255, 195, 72, 0.7)',
+    textShadowRadius: 6,
+  },
   combatTrackerContent: {
-    gap: 13,
-    paddingTop: 4,
-    paddingBottom: 22,
+    gap: Platform.OS === 'ios' ? 10 : 13,
   },
   combatRoundPanel: {
     minHeight: 56,
@@ -3462,43 +4041,80 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(196, 151, 76, 0.72)',
   },
   onlineCombatantCard: {
-    minHeight: 116,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    padding: 10,
+    width: '100%',
+    minHeight: Platform.OS === 'ios' ? 64 : 116,
     borderWidth: 1,
     borderColor: 'rgba(198, 154, 80, 0.5)',
     borderRadius: 5,
     backgroundColor: 'rgba(3, 13, 22, 0.95)',
   },
-  onlineCombatantCardCompact: {
-    flexWrap: 'wrap',
-    gap: 10,
+  onlineCombatantCardContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Platform.OS === 'ios' ? 8 : 14,
+    padding: Platform.OS === 'ios' ? 6 : 10,
+    position: 'relative',
+    zIndex: 3,
+    elevation: 3,
   },
-  onlineCombatantFirst: {
-    borderColor: '#E9BB5F',
-    shadowColor: '#E9B94F',
-    shadowOpacity: 0.24,
-    shadowRadius: 7,
-    elevation: 2,
+  onlineCombatantCardCompact: {
+    flexWrap: 'nowrap',
+    gap: 8,
+    padding: 5,
+  },
+  onlineCombatantCardShort: {
+    minHeight: 66,
+  },
+  compactPortrait: {
+    width: 52,
+    height: 52,
+  },
+  activeTurnFrameLayerCompact: {
+    top: Platform.OS === 'ios' ? -17 : -12,
+    bottom: Platform.OS === 'ios' ? -17 : -12,
+    ...(Platform.OS === 'ios' && { left: -10, right: -4 }),
+  },
+  onlineCombatantNameCompact: {
+    fontSize: 17,
+    lineHeight: 21,
+  },
+  onlineCombatantDetailsCompact: {
+    fontSize: 13,
+    lineHeight: 16,
+  },
+  onlineCombatantStatCompact: {
+    minWidth: 40,
+    flexDirection: 'row',
+    gap: 6,
+  },
+  onlineCombatantStatValueCompact: {
+    fontSize: 17,
+    lineHeight: 21,
+  },
+  onlineCombatantStatDividerCompact: {
+    height: 30,
+  },
+  onlineCombatantFrameWrapper: {
+    alignSelf: 'stretch',
+    marginHorizontal: 24,
+    position: 'relative',
+    overflow: 'visible',
+  },
+  onlineCombatantCurrentTurn: {
+    backgroundColor: 'rgba(42, 32, 15, 0.98)',
+    position: 'relative',
   },
   onlineCombatantInfo: {
     flex: 1,
-    minWidth: 120,
-    gap: 3,
-  },
-  firstInOrderLabel: {
-    color: '#EAC46F',
-    fontFamily: 'SourceSans3_600SemiBold',
-    fontSize: 11,
-    letterSpacing: 1.4,
+    minWidth: Platform.OS === 'ios' ? 90 : 120,
+    gap: Platform.OS === 'ios' ? 0 : 3,
   },
   onlineCombatantName: {
     color: '#F3E9DA',
     fontFamily: 'Cinzel_600SemiBold',
-    fontSize: 20,
-    lineHeight: 27,
+    fontSize: Platform.OS === 'ios' ? 15 : 20,
+    lineHeight: Platform.OS === 'ios' ? 19 : 27,
   },
   onlineCombatantEnemyName: {
     color: '#E99082',
@@ -3506,8 +4122,8 @@ const styles = StyleSheet.create({
   onlineCombatantDetails: {
     color: '#C8BDAD',
     fontFamily: 'SourceSans3_400Regular',
-    fontSize: 15,
-    lineHeight: 21,
+    fontSize: Platform.OS === 'ios' ? 12 : 15,
+    lineHeight: Platform.OS === 'ios' ? 16 : 21,
   },
   onlineCombatantEnemyLabel: {
     color: '#E78878',
@@ -3518,41 +4134,43 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
-    minWidth: 170,
+    gap: Platform.OS === 'ios' ? 8 : 12,
+    minWidth: Platform.OS === 'ios' ? 120 : 170,
     paddingLeft: 8,
   },
   onlineCombatantCardCompactStats: {
-    width: '100%',
+    width: 'auto',
     justifyContent: 'flex-end',
     minWidth: 0,
+    gap: 6,
+    paddingLeft: 0,
   },
   onlineCombatantStat: {
-    minWidth: 55,
+    minWidth: Platform.OS === 'ios' ? 40 : 55,
     alignItems: 'center',
   },
   onlineCombatantStatValue: {
     color: '#F2D182',
     fontFamily: 'Cinzel_600SemiBold',
-    fontSize: 25,
-    lineHeight: 30,
+    fontSize: Platform.OS === 'ios' ? 18 : 25,
+    lineHeight: Platform.OS === 'ios' ? 22 : 30,
     textAlign: 'center',
   },
   onlineCombatantStatLabel: {
     color: '#D7B66C',
     fontFamily: 'Cinzel_600SemiBold',
-    fontSize: 12,
+    fontSize: Platform.OS === 'ios' ? 9 : 12,
     letterSpacing: 1,
   },
   onlineCombatantCalculation: {
     marginTop: 1,
     color: '#C8BDAD',
     fontFamily: 'SourceSans3_400Regular',
-    fontSize: 12,
+    fontSize: Platform.OS === 'ios' ? 10 : 12,
   },
   onlineCombatantStatDivider: {
     width: 1,
-    height: 50,
+    height: Platform.OS === 'ios' ? 32 : 50,
     backgroundColor: 'rgba(196, 151, 76, 0.58)',
   },
   combatNoParticipants: {
@@ -3599,6 +4217,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 5,
+  },
+  combatFinishButton: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(231, 136, 120, 0.7)',
+    borderRadius: 5,
+    backgroundColor: 'rgba(120, 28, 28, 0.35)',
+  },
+  combatFinishText: {
+    color: '#F0A596',
+    fontFamily: 'SourceSans3_700Bold',
+    fontSize: 16,
   },
   combatReturnText: {
     color: '#D8C7AA',

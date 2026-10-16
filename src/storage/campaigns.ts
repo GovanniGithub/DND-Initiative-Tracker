@@ -101,6 +101,18 @@ export type CampaignCombatEnemy = {
 
 type CampaignCombatant = CampaignCombatEnemy | CampaignCombatAlly;
 
+export function sortCampaignCombatants<T extends { id: string; name: string; initiative: number }>(
+  combatants: T[],
+  partyMemberIds: ReadonlySet<string>,
+): T[] {
+  return [...combatants].sort(
+    (left, right) =>
+      right.initiative - left.initiative ||
+      Number(partyMemberIds.has(right.id)) - Number(partyMemberIds.has(left.id)) ||
+      left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }),
+  );
+}
+
 export function calculateCampaignInitiative(
   rawRoll: number,
   bonus: number,
@@ -478,9 +490,13 @@ function createId(): string {
 }
 
 function getActiveCharacters(characters: CampaignCharacter[]): CampaignCharacter[] {
-  return [...characters]
-    .filter((character) => (character.status ?? 'active') === 'active')
-    .sort((left, right) => right.initiative - left.initiative);
+  const activeCharacters = characters.filter(
+    (character) => (character.status ?? 'active') === 'active',
+  );
+  return sortCampaignCombatants(
+    activeCharacters,
+    new Set(activeCharacters.map((character) => character.id)),
+  );
 }
 
 function getCombatOrder(campaign: Campaign): CampaignCombatant[] {
@@ -503,8 +519,9 @@ function getCombatOrder(campaign: Campaign): CampaignCombatant[] {
       name: character.name,
       initiative: character.initiative,
     });
-  return [...characters, ...(combat.allies ?? []), ...(combat.enemies ?? [])].sort(
-    (left, right) => right.initiative - left.initiative,
+  return sortCampaignCombatants(
+    [...characters, ...(combat.allies ?? []), ...(combat.enemies ?? [])],
+    new Set(characters.map((character) => character.id)),
   );
 }
 
@@ -1370,13 +1387,17 @@ async function startCampaignCombatUnlocked(
     }))),
     ...allies,
     ...enemies,
-  ].sort((left, right) => right.initiative - left.initiative);
+  ];
+  const sortedCombatants = sortCampaignCombatants(
+    combatants,
+    new Set(initiativeOrder.map((character) => character.id)),
+  );
   const updatedCampaign: Campaign = {
     ...campaign,
     combat: {
       startedAt: new Date().toISOString(),
       round: 1,
-      currentCharacterId: combatants[0].id,
+      currentCharacterId: sortedCombatants[0].id,
       participantIds: initiativeOrder.map((character) => character.id),
       ...(characters ? { characters } : {}),
       ...(encounter
