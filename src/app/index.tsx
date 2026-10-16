@@ -1,5 +1,6 @@
 import { ThemedView } from '@/components/themed-view';
-import { useRef } from 'react';
+import { router } from 'expo-router';
+import { useEffect, useRef } from 'react';
 import {
   Animated,
   Image,
@@ -70,7 +71,9 @@ function GlowButton({
         fadeGlow(isHovered.current ? 1 : 0);
         animatePress(1);
       }}
-      onPress={() => console.log(`${label} clicked`)}
+      onPress={() => {
+        if (position === 'campaigns') router.push('/campaigns');
+      }}
       style={[styles.menuButton, styles[position]]}
     >
       <Animated.View
@@ -131,6 +134,10 @@ export default function HomeScreen() {
   const artworkAspectRatio = 941 / 1672;
   const artworkWidth = Math.min(width, height * artworkAspectRatio);
   const artworkHeight = artworkWidth / artworkAspectRatio;
+
+  useEffect(() => {
+    router.prefetch('/campaigns');
+  }, []);
 
   return (
     <ThemedView style={styles.container}>

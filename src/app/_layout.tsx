@@ -11,7 +11,15 @@ export default function TabLayout() {
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <AnimatedSplashOverlay />
-      <Stack screenOptions={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen
+          name="campaigns"
+          options={{
+            animation: 'fade',
+            animationDuration: 250,
+          }}
+        />
+      </Stack>
     </ThemeProvider>
   );
 }
