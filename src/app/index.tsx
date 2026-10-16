@@ -1,13 +1,11 @@
 import * as Device from 'expo-device';
-import { Platform, Pressable, StyleSheet } from 'react-native';
+import { useRef } from 'react';
+import { Animated, Image, Platform, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { Spacing } from '@/constants/theme';
 
 function getDevMenuHint() {
   if (Platform.OS === 'web') {
@@ -27,51 +25,76 @@ function getDevMenuHint() {
     </ThemedText>
   );
 }
+function GlowButton({label}: {label: string}) {
+  const glow = useRef(new Animated.Value(0)).current;
+
+  function fadeGlow(value: number){
+    Animated.timing(glow, {
+      toValue: value,
+      duration: 100,
+      useNativeDriver: false,
+    }).start();
+  }
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onHoverIn={() => fadeGlow(1)}
+      onHoverOut={() => fadeGlow(0)}
+      onFocus={() => fadeGlow(1)}
+      onBlur={() => fadeGlow(0)}
+      onPressIn={() => fadeGlow(1)}
+      onPressOut={() => fadeGlow(0)}
+      onPress={() => console.log(`${label} clicked`)}
+      style={styles.menuButton}
+    >
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.buttonGlow, { opacity: glow }]}
+      />
+
+      <Animated.Text
+        style={[
+          styles.menuButtonText,
+          {
+            textShadowColor: '#FFBD59',
+            textShadowOffset: { width: 0, height: 0 },
+            textShadowRadius: glow.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, 10],
+            }),
+          },
+        ]}>
+        {label}
+      </Animated.Text>
+    </Pressable>
+  );
+}
 
 export default function HomeScreen() {
   return (
     <ThemedView style={styles.container}>
+      <Animated.View
+          pointerEvents="none"
+          style={styles.pageFrame}
+      />
       <SafeAreaView style={styles.safeArea}>
         <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
+          
           <ThemedText type="title" style={styles.title}>
-            Some website Name
+            Initiative Tracker
           </ThemedText>
-        </ThemedView>
-
-        <Pressable 
-          onPress={() => console.log('Campaigns clicked')}
-          style={({ pressed }) => [
-            styles.menuButton,
-            pressed && styles.menuButtonPressed,
-           ]}
-        >
-          <ThemedText style={styles.menuButtonText}>Campaigns</ThemedText>
-        </Pressable>
-
-        <Pressable 
-          onPress={() => console.log('Settings clicked')}
-          style={({ pressed }) => [
-            styles.menuButton,
-            pressed && styles.menuButtonPressed,
-           ]}
-          >
-          <ThemedText style={styles.menuButtonText}>Settings</ThemedText>
-        </Pressable>
-
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
+          
+          <Image 
+            source={require('../../assets/images/dragons-d20.png')}
+            style={styles.dragonImage}
+            resizeMode="contain"
           />
         </ThemedView>
 
-        {Platform.OS === 'web' && <WebBadge />}
+        <GlowButton label="Campaigns" />
+        <GlowButton label="Settings" />
+
       </SafeAreaView>
     </ThemedView>
   );
@@ -80,26 +103,33 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#080F18',
     justifyContent: 'center',
     flexDirection: 'row',
   },
   safeArea: {
     flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
-  },
-  heroSection: {
+    width: '100%',
+    maxWidth: 600,
+    paddingHorizontal: 24,
+    paddingVertical: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
+    gap: 24,
+  },
+  heroSection: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+    gap: 24,
   },
   title: {
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
     textAlign: 'center',
+    color: '#F5DEAA',
+    lineHeight: 44,
+    fontSize: 36,
   },
   code: {
     textTransform: 'uppercase',
@@ -129,5 +159,33 @@ const styles = StyleSheet.create({
     color: '#F5DEAA',
     fontSize: 24,
     fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
   },
+  dragonImage: {
+    width: '100%',
+    maxWidth: 500,
+    height: 240,
+    alignSelf: 'center',
+  },
+  buttonGlow: {
+  ...StyleSheet.absoluteFillObject,
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: '#FFE0A0',
+  backgroundColor: 'rgba(218, 146, 40, 0.12)',
+  shadowColor: '#FFB640',
+  shadowOffset: { width: 0, height: 0 },
+  shadowOpacity: 0.8,
+  shadowRadius: 12,
+},
+pageFrame: {
+  position: 'absolute',
+  top: 16,
+  bottom: 16,
+  left: 16,
+  right: 16,
+  borderWidth: 1,
+  borderColor: '#C9A45C',
+  borderRadius: 16,
+},
 });
