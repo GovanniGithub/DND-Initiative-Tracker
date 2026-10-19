@@ -69,13 +69,19 @@ set current_turn_key = (
 where l.combat_started_at is not null
   and l.current_turn_key is null;
 
-alter function public.start_combat_lobby(uuid)
-  rename to start_combat_lobby_without_turn;
+do $$
+begin
+  if to_regprocedure('public.start_combat_lobby_without_turn(uuid)') is null then
+    alter function public.start_combat_lobby(uuid)
+      rename to start_combat_lobby_without_turn;
+  end if;
+end;
+$$;
 
 revoke all on function public.start_combat_lobby_without_turn(uuid)
   from public, anon, authenticated;
 
-create function public.start_combat_lobby(p_lobby_id uuid)
+create or replace function public.start_combat_lobby(p_lobby_id uuid)
 returns jsonb
 language plpgsql
 security definer
@@ -116,13 +122,19 @@ $$;
 revoke all on function public.start_combat_lobby(uuid) from public, anon;
 grant execute on function public.start_combat_lobby(uuid) to authenticated;
 
-alter function public.get_combat_lobby_snapshot(uuid)
-  rename to get_combat_lobby_snapshot_without_turn;
+do $$
+begin
+  if to_regprocedure('public.get_combat_lobby_snapshot_without_turn(uuid)') is null then
+    alter function public.get_combat_lobby_snapshot(uuid)
+      rename to get_combat_lobby_snapshot_without_turn;
+  end if;
+end;
+$$;
 
 revoke all on function public.get_combat_lobby_snapshot_without_turn(uuid)
   from public, anon, authenticated;
 
-create function public.get_combat_lobby_snapshot(p_lobby_id uuid)
+create or replace function public.get_combat_lobby_snapshot(p_lobby_id uuid)
 returns jsonb
 language plpgsql
 stable
@@ -166,7 +178,7 @@ $$;
 revoke all on function public.get_combat_lobby_snapshot(uuid) from public, anon;
 grant execute on function public.get_combat_lobby_snapshot(uuid) to authenticated;
 
-create function public.advance_combat_lobby_turn(p_lobby_id uuid)
+create or replace function public.advance_combat_lobby_turn(p_lobby_id uuid)
 returns jsonb
 language plpgsql
 security definer

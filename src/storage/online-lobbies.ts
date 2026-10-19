@@ -3,6 +3,7 @@ import {
   getSupabaseClient,
   type SupabaseIdentity,
 } from '@/lib/supabase';
+import { expandCampaignAlly } from '@/storage/campaigns';
 import type {
   CampaignCharacter,
   CampaignEncounter,
@@ -412,7 +413,7 @@ export async function createOnlineCombatLobby(
     isActive: false,
     conditions: [],
   }));
-  const allyData = await Promise.all(allies.map(async (ally) => ({
+  const allyData = await Promise.all(allies.flatMap(expandCampaignAlly).map(async (ally) => ({
     id: ally.id,
     name: ally.name,
     initiative: ally.initiative,
@@ -475,7 +476,7 @@ export async function createOnlineCombatLobby(
   return snapshot;
 }
 
-const LOBBY_SIGNATURE_KEY_PREFIX = 'dnd-initiative-tracker.online-lobby-signature.v1.';
+const LOBBY_SIGNATURE_KEY_PREFIX = 'dnd-initiative-tracker.online-lobby-signature.v2.';
 
 function getEncounterSignature(
   encounter: CampaignEncounter,

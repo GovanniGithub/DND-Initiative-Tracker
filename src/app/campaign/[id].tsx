@@ -13,6 +13,7 @@ import {
   updateCampaignCombatantHp,
   updateCampaignCharacterArmorClass,
   updateCampaignCharacterInitiative,
+  updateCampaignCharacterProfile,
   type Campaign,
   type CampaignCharacter,
   type CampaignCombatAlly,
@@ -414,6 +415,10 @@ export default function CampaignDetailScreen() {
   const [isEditingInitiative, setIsEditingInitiative] = useState(false);
   const [editedInitiative, setEditedInitiative] = useState(0);
   const [isEditingArmorClass, setIsEditingArmorClass] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editedName, setEditedName] = useState('');
+  const [editedRace, setEditedRace] = useState('');
+  const [editedPortrait, setEditedPortrait] = useState<{ uri: string | null } | null>(null);
   const [editedArmorClass, setEditedArmorClass] = useState('10');
   const [isCharacterDeleteConfirmVisible, setIsCharacterDeleteConfirmVisible] = useState(false);
   const [isUpdatingCharacter, setIsUpdatingCharacter] = useState(false);
@@ -453,59 +458,121 @@ export default function CampaignDetailScreen() {
   const [combatAllyArmorClass, setCombatAllyArmorClass] = useState('10');
   const [combatAllyInitiative, setCombatAllyInitiative] = useState(0);
   const [combatAllyMaxHp, setCombatAllyMaxHp] = useState('10');
+  const [combatAllyQuantity, setCombatAllyQuantity] = useState('1');
+  const [combatAllyMode, setCombatAllyMode] = useState<'individual' | 'horde'>('individual');
   const [combatAllyPortraitUri, setCombatAllyPortraitUri] = useState<string | null>(null);
   const [combatAllyPortraitPresetId, setCombatAllyPortraitPresetId] = useState<string | null>(null);
   const [isPickingCombatAllyPortrait, setIsPickingCombatAllyPortrait] = useState(false);
   const [isSavingCombatAlly, setIsSavingCombatAlly] = useState(false);
   const [combatAllyError, setCombatAllyError] = useState<string | null>(null);
 
+  async function pickCharacterPortraitUri(): Promise<string | null> {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.75,
+      base64: Platform.OS === 'web',
+    });
+    if (result.canceled) return null;
+
+    const asset = result.assets[0];
+    let sourceUri = asset.uri;
+    if (Platform.OS === 'web') {
+      if (!asset.base64) {
+        throw new Error('The selected portrait could not be read. Please choose it again.');
+      }
+      sourceUri = `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`;
+    }
+
+    const manipulator = ImageManipulator.manipulate(sourceUri);
+    if (Math.max(asset.width, asset.height) > 512) {
+      manipulator.resize(
+        asset.width >= asset.height ? { width: 512 } : { height: 512 },
+      );
+    }
+    const renderedImage = await manipulator.renderAsync();
+    const resizedImage = await renderedImage.saveAsync({
+      format: SaveFormat.JPEG,
+      compress: 0.75,
+      base64: Platform.OS === 'web',
+    });
+    if (Platform.OS === 'web') {
+      if (!resizedImage.base64) {
+        throw new Error('The portrait could not be resized. Please choose it again.');
+      }
+      return `data:image/jpeg;base64,${resizedImage.base64}`;
+    }
+    return resizedImage.uri;
+  }
+
   async function handlePickCharacterPortrait() {
     setIsPickingPortrait(true);
     setActionError(null);
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.75,
-        base64: Platform.OS === 'web',
-      });
-      if (result.canceled) return;
-
-      const asset = result.assets[0];
-      let sourceUri = asset.uri;
-      if (Platform.OS === 'web') {
-        if (!asset.base64) {
-          throw new Error('The selected portrait could not be read. Please choose it again.');
-        }
-        sourceUri = `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`;
-      }
-
-      const manipulator = ImageManipulator.manipulate(sourceUri);
-      if (Math.max(asset.width, asset.height) > 512) {
-        manipulator.resize(
-          asset.width >= asset.height ? { width: 512 } : { height: 512 },
-        );
-      }
-      const renderedImage = await manipulator.renderAsync();
-      const resizedImage = await renderedImage.saveAsync({
-        format: SaveFormat.JPEG,
-        compress: 0.75,
-        base64: Platform.OS === 'web',
-      });
-      if (Platform.OS === 'web') {
-        if (!resizedImage.base64) {
-          throw new Error('The portrait could not be resized. Please choose it again.');
-        }
-        setCharacterPortraitUri(`data:image/jpeg;base64,${resizedImage.base64}`);
-      } else {
-        setCharacterPortraitUri(resizedImage.uri);
-      }
+      const portraitUri = await pickCharacterPortraitUri();
+      if (!portraitUri) return;
+      setCharacterPortraitUri(portraitUri);
       setCharacterPortraitPresetId(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Portrait could not be selected.');
     } finally {
       setIsPickingPortrait(false);
+    }
+  }
+
+  async function handlePickEditedPortrait() {
+    setIsPickingPortrait(true);
+    setActionError(null);
+    try {
+      const portraitUri = await pickCharacterPortraitUri();
+      if (portraitUri) setEditedPortrait({ uri: portraitUri });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Portrait could not be selected.');
+    } finally {
+      setIsPickingPortrait(false);
+    }
+  }
+
+  async function handleSaveProfile() {
+    if (!campaign || !selectedCharacter || isUpdatingCharacter) return;
+    if (!editedName.trim()) {
+      setActionError('Enter a character name.');
+      return;
+    }
+    setIsUpdatingCharacter(true);
+    setActionError(null);
+    try {
+      const updatedCampaign = await updateCampaignCharacterProfile(
+        campaign.id,
+        selectedCharacter.id,
+        {
+          name: editedName,
+          race: editedRace,
+          ...(editedPortrait
+            ? { portraitUri: editedPortrait.uri, portraitPresetId: null }
+            : {}),
+        },
+      );
+      const updatedCharacter = (updatedCampaign.characters ?? []).find(
+        (character) => character.id === selectedCharacter.id,
+      );
+      setCampaign(updatedCampaign);
+      if (updatedCharacter) setSelectedCharacter(updatedCharacter);
+      setIsEditingProfile(false);
+    } catch (error) {
+      const isQuotaError =
+        error instanceof Error &&
+        /quota|storage|full|exceed/i.test(`${error.name} ${error.message}`);
+      setActionError(
+        isQuotaError
+          ? 'Not enough storage to save this photo. Try a smaller photo or remove unused characters or campaigns.'
+          : error instanceof Error
+            ? error.message
+            : 'Character could not be updated.',
+      );
+    } finally {
+      setIsUpdatingCharacter(false);
     }
   }
 
@@ -516,6 +583,8 @@ export default function CampaignDetailScreen() {
     setCombatAllyArmorClass('10');
     setCombatAllyInitiative(0);
     setCombatAllyMaxHp('10');
+    setCombatAllyQuantity('1');
+    setCombatAllyMode('individual');
     setCombatAllyPortraitUri(null);
     setCombatAllyPortraitPresetId(null);
     setCombatAllyError(null);
@@ -615,6 +684,11 @@ export default function CampaignDetailScreen() {
       setCombatAllyError('AC must be a whole number from 1 to 40.');
       return;
     }
+    const quantity = Number(combatAllyQuantity);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      setCombatAllyError('Quantity must be a whole number from 1 to 99.');
+      return;
+    }
 
     setIsSavingCombatAlly(true);
     setCombatAllyError(null);
@@ -630,6 +704,8 @@ export default function CampaignDetailScreen() {
         ...(combatAllyPortraitPresetId
           ? { portraitPresetId: combatAllyPortraitPresetId }
           : {}),
+        quantity,
+        initiativeMode: combatAllyMode,
         maxHp,
       };
       setEncounterAllies((current) => [...current, ally]);
@@ -1630,6 +1706,7 @@ export default function CampaignDetailScreen() {
           setEditedInitiative(character.initiative);
           setIsEditingInitiative(false);
           setIsEditingArmorClass(false);
+          setIsEditingProfile(false);
           setIsCharacterDeleteConfirmVisible(false);
           setIsCharacterMenuVisible(true);
         }}
@@ -2014,6 +2091,7 @@ export default function CampaignDetailScreen() {
                                 setEditedInitiative(character.initiative);
                                 setIsEditingInitiative(false);
                                 setIsEditingArmorClass(false);
+          setIsEditingProfile(false);
                                 setIsCharacterDeleteConfirmVisible(false);
                                 setIsCharacterMenuVisible(true);
                               }}
@@ -2513,7 +2591,15 @@ export default function CampaignDetailScreen() {
                       </Text>
                       <Text style={styles.encounterEnemyModeBadge}>
                         HP {ally.maxHp ?? 10}
+                        {(ally.quantity ?? 1) > 1 ? ' each' : ''}
                       </Text>
+                      {(ally.quantity ?? 1) > 1 && (
+                        <Text style={styles.encounterEnemyModeBadge}>
+                          {ally.initiativeMode === 'horde'
+                            ? `${ally.quantity} allies · 1 initiative`
+                            : `Individual · ${ally.quantity} allies`}
+                        </Text>
+                      )}
                       <Text style={styles.encounterEnemyModeBadge}>
                         AC {ally.armorClass ?? 10}
                       </Text>
@@ -3123,6 +3209,262 @@ export default function CampaignDetailScreen() {
               </KeyboardAvoidingView>
             </View>
           )}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsAddingCombatAlly(false)}
+        transparent
+        visible={isAddingCombatAlly}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.combatModal}>
+            <Text style={styles.modalTitle}>Add Ally</Text>
+              <ScrollView
+                contentContainerStyle={styles.combatAllyFormContent}
+                keyboardShouldPersistTaps="handled"
+                style={styles.combatAllyFormScroll}
+              >
+                <Text style={styles.modalDescription}>
+                  This ally is saved with this encounter only and won’t be added to the Party tab.
+                </Text>
+                <CharacterPresetPicker
+                  onSelect={chooseCombatAllyPreset}
+                  selectedPresetId={combatAllyPortraitPresetId}
+                />
+                <TextInput
+                  accessibilityLabel="Ally name"
+                  autoCapitalize="words"
+                  maxLength={40}
+                  onChangeText={setCombatAllyName}
+                  placeholder="Character name"
+                  placeholderTextColor="#A8987D"
+                  style={styles.modalInput}
+                  value={combatAllyName}
+                />
+                <TextInput
+                  accessibilityLabel="Ally race"
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                  maxLength={30}
+                  onChangeText={setCombatAllyRace}
+                  placeholder="Race (optional)"
+                  placeholderTextColor="#8D806B"
+                  style={styles.modalInput}
+                  value={combatAllyRace}
+                />
+                <Text style={styles.fieldLabel}>Maximum HP</Text>
+                <TextInput
+                  accessibilityLabel="Ally maximum HP"
+                  keyboardType="number-pad"
+                  maxLength={4}
+                  onChangeText={setCombatAllyMaxHp}
+                  placeholder="10"
+                  placeholderTextColor="#8D806B"
+                  style={styles.modalInput}
+                  value={combatAllyMaxHp}
+                />
+                <Text style={styles.fieldLabel}>AC (Armor Class)</Text>
+                <TextInput
+                  accessibilityLabel="Ally AC (Armor Class)"
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  onChangeText={setCombatAllyArmorClass}
+                  placeholder="10"
+                  placeholderTextColor="#8D806B"
+                  style={styles.modalInput}
+                  value={combatAllyArmorClass}
+                />
+                <View style={styles.enemyQuantityInitiativeRow}>
+                  <Text style={styles.fieldLabel}>Quantity</Text>
+                  <View style={styles.enemyQuantityControl}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Decrease ally quantity"
+                      onPress={() =>
+                        setCombatAllyQuantity(String(Math.max(1, Number(combatAllyQuantity || 1) - 1)))
+                      }
+                      style={styles.enemyQuantityButton}
+                    >
+                      <Text style={styles.enemyQuantityButtonText}>−</Text>
+                    </Pressable>
+                    <TextInput
+                      accessibilityLabel="Ally quantity"
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      onChangeText={setCombatAllyQuantity}
+                      style={styles.enemyQuantityInput}
+                      value={combatAllyQuantity}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Increase ally quantity"
+                      onPress={() =>
+                        setCombatAllyQuantity(String(Math.min(99, Number(combatAllyQuantity || 0) + 1)))
+                      }
+                      style={styles.enemyQuantityButton}
+                    >
+                      <Text style={styles.enemyQuantityButtonText}>＋</Text>
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.enemyModeRow}>
+                  <Text style={styles.fieldLabel}>Initiative mode</Text>
+                  <View style={styles.enemyModeOptions}>
+                    {(['individual', 'horde'] as const).map((mode) => (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: combatAllyMode === mode }}
+                        key={mode}
+                        onPress={() => setCombatAllyMode(mode)}
+                        style={[
+                          styles.enemyModeButton,
+                          combatAllyMode === mode && styles.enemyModeButtonSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.enemyModeButtonText,
+                            combatAllyMode === mode && styles.enemyModeButtonTextSelected,
+                          ]}
+                        >
+                          {mode === 'individual' ? 'Individual' : 'Horde'}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+                <Text style={styles.enemyModeDescription}>
+                  {combatAllyMode === 'horde'
+                    ? `All ${combatAllyQuantity || '0'} allies act on one initiative turn.`
+                    : 'Each ally gets a separate turn in initiative.'}
+                </Text>
+                <Text style={styles.fieldLabel}>Class</Text>
+                <View style={styles.classOptions}>
+                  {CHARACTER_CLASSES.map((className) => (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: combatAllyClass === className }}
+                      key={className}
+                      onPress={() => setCombatAllyClass(className)}
+                      style={[
+                        styles.classOption,
+                        combatAllyClass === className && styles.selectedClassOption,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.classOptionText,
+                          combatAllyClass === className && styles.selectedClassOptionText,
+                        ]}
+                      >
+                        {className}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isPickingCombatAllyPortrait || isSavingCombatAlly}
+                  onPress={() => void handlePickCombatAllyPortrait()}
+                  style={styles.portraitPickerButton}
+                >
+                  <Text style={styles.portraitPickerText}>
+                    {isPickingCombatAllyPortrait
+                      ? 'Preparing photo…'
+                      : combatAllyPortraitUri || combatAllyPortraitPresetId
+                        ? 'Change Character Image'
+                        : 'Add Character Image'}
+                  </Text>
+                </Pressable>
+                {(combatAllyPortraitUri || combatAllyPortraitPresetId) && (
+                  <View style={styles.portraitPreviewRow}>
+                    <Image
+                      accessibilityLabel="Temporary ally portrait preview"
+                      resizeMode="cover"
+                      source={getCharacterPortraitSource(
+                        combatAllyPortraitPresetId ?? undefined,
+                        combatAllyPortraitUri,
+                      )}
+                      style={styles.portraitPreview}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isSavingCombatAlly || isPickingCombatAllyPortrait}
+                      onPress={() => {
+                        setCombatAllyPortraitUri(null);
+                        setCombatAllyPortraitPresetId(null);
+                      }}
+                      style={styles.removePortraitButton}
+                    >
+                      <Text style={styles.removePortraitText}>Remove image</Text>
+                    </Pressable>
+                  </View>
+                )}
+                <View style={styles.initiativeHeader}>
+                  <Text style={styles.fieldLabel}>Initiative Modifier</Text>
+                  <Text accessibilityLiveRegion="polite" style={styles.initiativeValue}>
+                    {combatAllyInitiative >= 0 ? '+' : ''}
+                    {combatAllyInitiative}
+                  </Text>
+                </View>
+                <Slider
+                  accessibilityLabel="Ally initiative modifier"
+                  accessibilityValue={{
+                    min: -4,
+                    max: 10,
+                    now: combatAllyInitiative,
+                    text: `${combatAllyInitiative >= 0 ? '+' : ''}${combatAllyInitiative}`,
+                  }}
+                  maximumTrackTintColor="#5B513F"
+                  maximumValue={10}
+                  minimumTrackTintColor="#D9A64D"
+                  minimumValue={-4}
+                  onValueChange={(value) => setCombatAllyInitiative(Math.round(value))}
+                  step={1}
+                  style={styles.initiativeSlider}
+                  thumbTintColor="#F4DDAE"
+                  value={combatAllyInitiative}
+                />
+                <View style={styles.sliderLimits}>
+                  <Text style={styles.sliderLimitText}>−4</Text>
+                  <Text style={styles.sliderLimitText}>+10</Text>
+                </View>
+                {combatAllyError && <Text style={styles.errorText}>{combatAllyError}</Text>}
+                <View style={styles.modalActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isSavingCombatAlly || isPickingCombatAllyPortrait}
+                    onPress={() => setIsAddingCombatAlly(false)}
+                    style={styles.cancelButton}
+                  >
+                    <Text style={styles.cancelText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={
+                      !combatAllyName.trim() ||
+                      !combatAllyClass ||
+                      isSavingCombatAlly ||
+                      isPickingCombatAllyPortrait
+                    }
+                    onPress={() => void handleAddCombatAlly()}
+                    style={[
+                      styles.saveButton,
+                      (!combatAllyName.trim() ||
+                        !combatAllyClass ||
+                        isSavingCombatAlly ||
+                        isPickingCombatAllyPortrait) &&
+                        styles.disabledSaveButton,
+                    ]}
+                  >
+                    <Text style={styles.saveText}>
+                      {isSavingCombatAlly ? 'Adding…' : 'Add to Encounter'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
+          </View>
+        </View>
+      </Modal>
         </KeyboardAvoidingView>
       </Modal>
 
@@ -3663,6 +4005,7 @@ export default function CampaignDetailScreen() {
           setIsCharacterMenuVisible(false);
           setIsEditingInitiative(false);
           setIsEditingArmorClass(false);
+          setIsEditingProfile(false);
           setIsCharacterDeleteConfirmVisible(false);
         }}
         transparent
@@ -3673,6 +4016,8 @@ export default function CampaignDetailScreen() {
             <Text style={styles.modalTitle}>
               {isCharacterDeleteConfirmVisible
                 ? 'Delete Character?'
+                : isEditingProfile
+                  ? 'Edit Character'
                 : isEditingInitiative
                   ? 'Change Initiative'
                   : isEditingArmorClass
@@ -3682,6 +4027,8 @@ export default function CampaignDetailScreen() {
             <Text style={styles.modalDescription}>
               {isCharacterDeleteConfirmVisible
                 ? 'This permanently removes the character from this campaign.'
+                : isEditingProfile
+                  ? 'Change the name, race or photo.'
                 : isEditingInitiative
                   ? 'Set the initiative modifier from −4 to +10.'
                   : isEditingArmorClass
@@ -3692,10 +4039,73 @@ export default function CampaignDetailScreen() {
                     ? 'Stored characters are not included in combat.'
                     : 'Manage this character in your campaign.'}
             </Text>
-            {(isEditingInitiative || isEditingArmorClass) &&
+            {(isEditingInitiative || isEditingArmorClass || isEditingProfile) &&
             !isCharacterDeleteConfirmVisible ? (
               <>
-                {isEditingInitiative ? (
+                {isEditingProfile ? (
+                  <>
+                    <TextInput
+                      accessibilityLabel="Character name"
+                      autoCapitalize="words"
+                      maxLength={40}
+                      onChangeText={(value) => {
+                        setEditedName(value);
+                        setActionError(null);
+                      }}
+                      placeholder="Character name"
+                      placeholderTextColor="#A8987D"
+                      style={styles.modalInput}
+                      value={editedName}
+                    />
+                    <TextInput
+                      accessibilityLabel="Character race"
+                      autoCapitalize="words"
+                      autoCorrect={false}
+                      maxLength={30}
+                      onChangeText={setEditedRace}
+                      placeholder="Race (optional)"
+                      placeholderTextColor="#8D806B"
+                      style={styles.modalInput}
+                      value={editedRace}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isPickingPortrait || isUpdatingCharacter}
+                      onPress={() => void handlePickEditedPortrait()}
+                      style={styles.portraitPickerButton}
+                    >
+                      <Text style={styles.portraitPickerText}>
+                        {isPickingPortrait
+                          ? 'Opening Photos...'
+                          : (editedPortrait ? editedPortrait.uri : selectedCharacter?.portraitUri) ||
+                              (!editedPortrait && selectedCharacter?.portraitPresetId)
+                            ? 'Change Photo'
+                            : 'Add Photo'}
+                      </Text>
+                    </Pressable>
+                    {(editedPortrait ? editedPortrait.uri : selectedCharacter?.portraitUri) && (
+                      <View style={styles.portraitPreviewRow}>
+                        <Image
+                          accessibilityLabel="Character photo preview"
+                          source={{
+                            uri: (editedPortrait
+                              ? editedPortrait.uri
+                              : selectedCharacter?.portraitUri) as string,
+                          }}
+                          style={styles.portraitPreview}
+                        />
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={isUpdatingCharacter}
+                          onPress={() => setEditedPortrait({ uri: null })}
+                          style={styles.removePortraitButton}
+                        >
+                          <Text style={styles.removePortraitText}>Remove photo</Text>
+                        </Pressable>
+                      </View>
+                    )}
+                  </>
+                ) : isEditingInitiative ? (
                   <>
                     <View style={styles.initiativeHeader}>
                       <Text style={styles.fieldLabel}>Initiative Modifier</Text>
@@ -3753,6 +4163,7 @@ export default function CampaignDetailScreen() {
                     onPress={() => {
                       setIsEditingInitiative(false);
                       setIsEditingArmorClass(false);
+          setIsEditingProfile(false);
                     }}
                     style={styles.cancelButton}
                   >
@@ -3762,16 +4173,20 @@ export default function CampaignDetailScreen() {
                     accessibilityRole="button"
                     disabled={isUpdatingCharacter}
                     onPress={() => void (
-                      isEditingInitiative
-                        ? handleSaveInitiative()
-                        : handleSaveArmorClass()
+                      isEditingProfile
+                        ? handleSaveProfile()
+                        : isEditingInitiative
+                          ? handleSaveInitiative()
+                          : handleSaveArmorClass()
                     )}
                     style={styles.saveButton}
                   >
                     <Text style={styles.saveText}>
                       {isUpdatingCharacter
                         ? 'Saving...'
-                        : isEditingInitiative ? 'Save Initiative' : 'Save AC'}
+                        : isEditingProfile
+                          ? 'Save'
+                          : isEditingInitiative ? 'Save Initiative' : 'Save AC'}
                     </Text>
                   </Pressable>
                 </View>
@@ -3803,9 +4218,24 @@ export default function CampaignDetailScreen() {
                   accessibilityRole="button"
                   disabled={isUpdatingCharacter}
                   onPress={() => {
+                    setEditedName(selectedCharacter?.name ?? '');
+                    setEditedRace(selectedCharacter?.race ?? '');
+                    setEditedPortrait(null);
+                    setIsEditingProfile(true);
+                    setActionError(null);
+                  }}
+                  style={styles.characterAction}
+                >
+                  <Text style={styles.characterActionText}>Edit Name, Race &amp; Photo</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isUpdatingCharacter}
+                  onPress={() => {
                     setEditedInitiative(selectedCharacter?.initiative ?? 0);
                     setIsEditingInitiative(true);
                     setIsEditingArmorClass(false);
+          setIsEditingProfile(false);
                     setActionError(null);
                   }}
                   style={styles.characterAction}
@@ -3903,14 +4333,10 @@ export default function CampaignDetailScreen() {
       <Modal
         animationType="fade"
         onRequestClose={() => {
-          if (isAddingCombatAlly) setIsAddingCombatAlly(false);
-          else setIsCombatModalVisible(false);
+          setIsCombatModalVisible(false);
         }}
         transparent
-        visible={
-          (isCombatModalVisible && Boolean(campaign?.combat)) ||
-          (isAddingCombatAlly && isEncounterEditorVisible)
-        }
+        visible={isCombatModalVisible && Boolean(campaign?.combat)}
       >
         <View
           style={[
@@ -4039,191 +4465,7 @@ export default function CampaignDetailScreen() {
                 </View>
               </>
             )}
-            {isAddingCombatAlly && (
-              <Text style={styles.modalTitle}>Add Ally</Text>
-            )}
-            {isAddingCombatAlly ? (
-              <ScrollView
-                contentContainerStyle={styles.combatAllyFormContent}
-                keyboardShouldPersistTaps="handled"
-                style={styles.combatAllyFormScroll}
-              >
-                <Text style={styles.modalDescription}>
-                  This ally is saved with this encounter only and won’t be added to the Party tab.
-                </Text>
-                <CharacterPresetPicker
-                  onSelect={chooseCombatAllyPreset}
-                  selectedPresetId={combatAllyPortraitPresetId}
-                />
-                <TextInput
-                  accessibilityLabel="Ally name"
-                  autoCapitalize="words"
-                  maxLength={40}
-                  onChangeText={setCombatAllyName}
-                  placeholder="Character name"
-                  placeholderTextColor="#A8987D"
-                  style={styles.modalInput}
-                  value={combatAllyName}
-                />
-                <TextInput
-                  accessibilityLabel="Ally race"
-                  autoCapitalize="words"
-                  autoCorrect={false}
-                  maxLength={30}
-                  onChangeText={setCombatAllyRace}
-                  placeholder="Race (optional)"
-                  placeholderTextColor="#8D806B"
-                  style={styles.modalInput}
-                  value={combatAllyRace}
-                />
-                <Text style={styles.fieldLabel}>Maximum HP</Text>
-                <TextInput
-                  accessibilityLabel="Ally maximum HP"
-                  keyboardType="number-pad"
-                  maxLength={4}
-                  onChangeText={setCombatAllyMaxHp}
-                  placeholder="10"
-                  placeholderTextColor="#8D806B"
-                  style={styles.modalInput}
-                  value={combatAllyMaxHp}
-                />
-                <Text style={styles.fieldLabel}>AC (Armor Class)</Text>
-                <TextInput
-                  accessibilityLabel="Ally AC (Armor Class)"
-                  keyboardType="number-pad"
-                  maxLength={2}
-                  onChangeText={setCombatAllyArmorClass}
-                  placeholder="10"
-                  placeholderTextColor="#8D806B"
-                  style={styles.modalInput}
-                  value={combatAllyArmorClass}
-                />
-                <Text style={styles.fieldLabel}>Class</Text>
-                <View style={styles.classOptions}>
-                  {CHARACTER_CLASSES.map((className) => (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: combatAllyClass === className }}
-                      key={className}
-                      onPress={() => setCombatAllyClass(className)}
-                      style={[
-                        styles.classOption,
-                        combatAllyClass === className && styles.selectedClassOption,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.classOptionText,
-                          combatAllyClass === className && styles.selectedClassOptionText,
-                        ]}
-                      >
-                        {className}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={isPickingCombatAllyPortrait || isSavingCombatAlly}
-                  onPress={() => void handlePickCombatAllyPortrait()}
-                  style={styles.portraitPickerButton}
-                >
-                  <Text style={styles.portraitPickerText}>
-                    {isPickingCombatAllyPortrait
-                      ? 'Preparing photo…'
-                      : combatAllyPortraitUri || combatAllyPortraitPresetId
-                        ? 'Change Character Image'
-                        : 'Add Character Image'}
-                  </Text>
-                </Pressable>
-                {(combatAllyPortraitUri || combatAllyPortraitPresetId) && (
-                  <View style={styles.portraitPreviewRow}>
-                    <Image
-                      accessibilityLabel="Temporary ally portrait preview"
-                      resizeMode="cover"
-                      source={getCharacterPortraitSource(
-                        combatAllyPortraitPresetId ?? undefined,
-                        combatAllyPortraitUri,
-                      )}
-                      style={styles.portraitPreview}
-                    />
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={isSavingCombatAlly || isPickingCombatAllyPortrait}
-                      onPress={() => {
-                        setCombatAllyPortraitUri(null);
-                        setCombatAllyPortraitPresetId(null);
-                      }}
-                      style={styles.removePortraitButton}
-                    >
-                      <Text style={styles.removePortraitText}>Remove image</Text>
-                    </Pressable>
-                  </View>
-                )}
-                <View style={styles.initiativeHeader}>
-                  <Text style={styles.fieldLabel}>Initiative Modifier</Text>
-                  <Text accessibilityLiveRegion="polite" style={styles.initiativeValue}>
-                    {combatAllyInitiative >= 0 ? '+' : ''}
-                    {combatAllyInitiative}
-                  </Text>
-                </View>
-                <Slider
-                  accessibilityLabel="Ally initiative modifier"
-                  accessibilityValue={{
-                    min: -4,
-                    max: 10,
-                    now: combatAllyInitiative,
-                    text: `${combatAllyInitiative >= 0 ? '+' : ''}${combatAllyInitiative}`,
-                  }}
-                  maximumTrackTintColor="#5B513F"
-                  maximumValue={10}
-                  minimumTrackTintColor="#D9A64D"
-                  minimumValue={-4}
-                  onValueChange={(value) => setCombatAllyInitiative(Math.round(value))}
-                  step={1}
-                  style={styles.initiativeSlider}
-                  thumbTintColor="#F4DDAE"
-                  value={combatAllyInitiative}
-                />
-                <View style={styles.sliderLimits}>
-                  <Text style={styles.sliderLimitText}>−4</Text>
-                  <Text style={styles.sliderLimitText}>+10</Text>
-                </View>
-                {combatAllyError && <Text style={styles.errorText}>{combatAllyError}</Text>}
-                <View style={styles.modalActions}>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={isSavingCombatAlly || isPickingCombatAllyPortrait}
-                    onPress={() => setIsAddingCombatAlly(false)}
-                    style={styles.cancelButton}
-                  >
-                    <Text style={styles.cancelText}>Cancel</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={
-                      !combatAllyName.trim() ||
-                      !combatAllyClass ||
-                      isSavingCombatAlly ||
-                      isPickingCombatAllyPortrait
-                    }
-                    onPress={() => void handleAddCombatAlly()}
-                    style={[
-                      styles.saveButton,
-                      (!combatAllyName.trim() ||
-                        !combatAllyClass ||
-                        isSavingCombatAlly ||
-                        isPickingCombatAllyPortrait) &&
-                        styles.disabledSaveButton,
-                    ]}
-                  >
-                    <Text style={styles.saveText}>
-                      {isSavingCombatAlly ? 'Adding…' : 'Add to Encounter'}
-                    </Text>
-                  </Pressable>
-                </View>
-              </ScrollView>
-            ) : (
+            {(
               <>
                 <ScrollView
                   contentContainerStyle={styles.initiativeListContent}
@@ -4349,6 +4591,7 @@ export default function CampaignDetailScreen() {
                               setEditedInitiative(savedCharacter.initiative);
                               setIsEditingInitiative(false);
                               setIsEditingArmorClass(false);
+          setIsEditingProfile(false);
                               setIsCharacterDeleteConfirmVisible(false);
                               setIsCharacterMenuVisible(true);
                             }}

@@ -71,6 +71,8 @@ export type CampaignCombatAlly = {
   armorClass?: number;
   portraitUri?: string | null;
   portraitPresetId?: string;
+  quantity?: number;
+  initiativeMode?: 'individual' | 'horde';
   maxHp?: number;
   currentHp?: number;
   initiativeRoll?: number;
@@ -132,12 +134,59 @@ export function getCampaignInitiativeKey(
   memberIndex?: number,
   horde = false,
 ): string {
+  if (participantType === 'ally') {
+    if (horde) return `ally:${participantId}:horde`;
+    return memberIndex === undefined ? `ally:${participantId}` : `ally:${participantId}:${memberIndex}`;
+  }
   if (participantType === 'enemy') {
     return horde
       ? `enemy:${participantId}:horde`
       : `enemy:${participantId}:${memberIndex ?? 0}`;
   }
   return `${participantType}:${participantId}`;
+}
+
+function isAllyHorde(ally: CampaignCombatAlly) {
+  return ally.initiativeMode === 'horde' && (ally.quantity ?? 1) > 1;
+}
+
+export function getAllyInitiativeEntries(
+  ally: CampaignCombatAlly,
+): { key: string; bonus: number; index?: number }[] {
+  const quantity = ally.quantity ?? 1;
+  if (isAllyHorde(ally)) {
+    return [{ key: getCampaignInitiativeKey('ally', ally.id, undefined, true), bonus: ally.initiative }];
+  }
+  if (quantity === 1) {
+    return [{ key: getCampaignInitiativeKey('ally', ally.id), bonus: ally.initiative }];
+  }
+  return Array.from({ length: quantity }, (_, index) => ({
+    key: getCampaignInitiativeKey('ally', ally.id, index),
+    bonus: ally.initiative,
+    index,
+  }));
+}
+
+// Expands an encounter ally into the combatants it becomes once combat starts.
+export function expandCampaignAlly(ally: CampaignCombatAlly): CampaignCombatAlly[] {
+  const quantity = ally.quantity ?? 1;
+  const maxHp = ally.maxHp ?? 10;
+  if (isAllyHorde(ally)) {
+    return [{
+      ...ally,
+      name: `${ally.name} Horde (${quantity})`,
+      maxHp: maxHp * quantity,
+    }];
+  }
+  if (quantity === 1) return [{ ...ally, maxHp }];
+  return Array.from({ length: quantity }, (_, index) => ({
+    ...ally,
+    id: `${ally.id}-${index + 1}`,
+    name: `${ally.name} ${index + 1}`,
+    quantity: 1,
+    initiativeMode: 'individual' as const,
+    maxHp,
+  }));
 }
 
 export type CampaignEncounterEnemyInput = {
@@ -445,6 +494,14 @@ function isCampaignCombatAlly(value: unknown): value is CampaignCombatAlly {
       typeof ally.portraitUri === 'string') &&
     (ally.portraitPresetId === undefined ||
       typeof ally.portraitPresetId === 'string') &&
+    (ally.quantity === undefined ||
+      (typeof ally.quantity === 'number' &&
+        Number.isInteger(ally.quantity) &&
+        ally.quantity >= 1 &&
+        ally.quantity <= 99)) &&
+    (ally.initiativeMode === undefined ||
+      ally.initiativeMode === 'individual' ||
+      ally.initiativeMode === 'horde') &&
     (ally.maxHp === undefined ||
       (typeof ally.maxHp === 'number' &&
         Number.isInteger(ally.maxHp) &&
@@ -789,6 +846,11 @@ export async function saveCampaignEncounter(
           (!Number.isInteger(ally.armorClass) ||
             ally.armorClass < 1 ||
             ally.armorClass > 40)) ||
+        (ally.quantity !== undefined &&
+          (!Number.isInteger(ally.quantity) || ally.quantity < 1 || ally.quantity > 99)) ||
+        (ally.initiativeMode !== undefined &&
+          ally.initiativeMode !== 'individual' &&
+          ally.initiativeMode !== 'horde') ||
         !Number.isInteger(ally.maxHp) ||
         (ally.maxHp ?? 0) < 1 ||
         (ally.maxHp ?? 0) > 9999,
@@ -880,7 +942,7 @@ export async function saveCampaignEncounter(
     }
   }
   for (const ally of savedAllies) {
-    initiativeBonuses[getCampaignInitiativeKey('ally', ally.id)] = ally.initiative;
+    for (const entry of getAllyInitiativeEntries(ally)) initiativeBonuses[entry.key] = entry.bonus;
   }
   for (const enemy of savedEnemies) {
     if (enemy.initiativeMode === 'horde' && (enemy.quantity ?? 1) > 1) {
@@ -980,7 +1042,7 @@ async function persistCampaignEncounterInitiative(
     }
   }
   for (const ally of encounter.allies ?? []) {
-    bonuses[getCampaignInitiativeKey('ally', ally.id)] = ally.initiative;
+    for (const entry of getAllyInitiativeEntries(ally)) bonuses[entry.key] = entry.bonus;
   }
   for (const enemy of encounter.enemies) {
     if (enemy.initiativeMode === 'horde' && (enemy.quantity ?? 1) > 1) {
@@ -1200,6 +1262,83 @@ export async function updateCampaignCharacterArmorClass(
   return updatedCampaign;
 }
 
+export async function updateCampaignCharacterProfile(
+  campaignId: string,
+  characterId: string,
+  changes: {
+    name: string;
+    race?: string;
+    // undefined keeps the current portrait, null removes it
+    portraitUri?: string | null;
+    portraitPresetId?: string | null;
+  },
+): Promise<Campaign> {
+  const name = changes.name.trim();
+  if (!name) throw new Error('Enter a character name.');
+  const campaigns = await loadCampaigns();
+  const campaign = campaigns.find((item) => item.id === campaignId);
+  if (!campaign) throw new Error('That campaign could not be found.');
+  const existing = (campaign.characters ?? []).find((item) => item.id === characterId);
+  if (!existing) throw new Error('That character could not be found.');
+
+  const portraitChanged = changes.portraitUri !== undefined;
+  const newPortraitUri = changes.portraitUri
+    ? await persistImage(
+        changes.portraitUri,
+        'campaign-character-portraits',
+        `${campaignId}-${characterId}-${Date.now()}.jpg`,
+      )
+    : null;
+
+  const updatedCharacters = (campaign.characters ?? []).map((character) => {
+    if (character.id !== characterId) return character;
+    const { portraitPresetId: _oldPreset, ...rest } = character;
+    const presetId = portraitChanged ? changes.portraitPresetId : _oldPreset;
+    return {
+      ...rest,
+      name,
+      race: (changes.race ?? character.race ?? '').trim(),
+      portraitUri: portraitChanged ? newPortraitUri : character.portraitUri,
+      ...(presetId ? { portraitPresetId: presetId } : {}),
+    };
+  });
+  const updatedCampaign: Campaign = {
+    ...campaign,
+    characters: updatedCharacters,
+    ...(campaign.combat?.characters
+      ? {
+          combat: {
+            ...campaign.combat,
+            characters: campaign.combat.characters.map((character) =>
+              character.id === characterId ? { ...character, name } : character,
+            ),
+          },
+        }
+      : {}),
+  };
+  try {
+    await saveCampaigns(
+      campaigns.map((item) => (item.id === campaignId ? updatedCampaign : item)),
+    );
+  } catch (error) {
+    if (newPortraitUri && Platform.OS !== 'web') new File(newPortraitUri).delete();
+    throw error;
+  }
+  if (
+    portraitChanged &&
+    Platform.OS !== 'web' &&
+    existing.portraitUri &&
+    existing.portraitUri !== newPortraitUri
+  ) {
+    try {
+      new File(existing.portraitUri).delete();
+    } catch {
+      // The old file is orphaned but the save succeeded.
+    }
+  }
+  return updatedCampaign;
+}
+
 export async function deleteCampaignCharacter(
   campaignId: string,
   characterId: string,
@@ -1289,10 +1428,9 @@ async function startCampaignCombatUnlocked(
       getCampaignInitiativeKey('character', character.id),
       character.initiative,
     ] as [string, number]),
-    ...(encounter?.allies ?? []).map((ally) => [
-      getCampaignInitiativeKey('ally', ally.id),
-      ally.initiative,
-    ] as [string, number]),
+    ...(encounter?.allies ?? []).flatMap((ally) =>
+      getAllyInitiativeEntries(ally).map((entry) => [entry.key, entry.bonus] as [string, number]),
+    ),
     ...(encounter?.enemies ?? []).flatMap((enemy) => {
       const quantity = enemy.quantity ?? 1;
       return enemy.initiativeMode === 'horde' && quantity > 1
@@ -1327,18 +1465,21 @@ async function startCampaignCombatUnlocked(
         };
       })
     : undefined;
-  const allies = (encounter?.allies ?? []).map((ally) => {
-    const result = initiativeResults[getCampaignInitiativeKey('ally', ally.id)];
-    if (!result) throw new Error(`${ally.name} is still waiting on initiative.`);
-    return {
-      ...ally,
-      initiative: result.total,
-      initiativeRoll: result.rawRoll,
-      initiativeBonus: result.bonus,
-      initiativeTotal: result.total,
-      maxHp: ally.maxHp ?? 10,
-      currentHp: ally.maxHp ?? 10,
-    };
+  const allies = (encounter?.allies ?? []).flatMap((ally) => {
+    const entries = getAllyInitiativeEntries(ally);
+    return expandCampaignAlly(ally).map((member, memberIndex) => {
+      const result = initiativeResults[entries[memberIndex].key];
+      if (!result) throw new Error(`${member.name} is still waiting on initiative.`);
+      return {
+        ...member,
+        initiative: result.total,
+        initiativeRoll: result.rawRoll,
+        initiativeBonus: result.bonus,
+        initiativeTotal: result.total,
+        maxHp: member.maxHp ?? 10,
+        currentHp: member.maxHp ?? 10,
+      };
+    });
   });
   const enemies = (encounter?.enemies ?? []).flatMap((enemy) => {
     const quantity = enemy.quantity ?? 1;
