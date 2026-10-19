@@ -473,15 +473,33 @@ export default function CampaignDetailScreen() {
       if (result.canceled) return;
 
       const asset = result.assets[0];
+      let sourceUri = asset.uri;
       if (Platform.OS === 'web') {
         if (!asset.base64) {
           throw new Error('The selected portrait could not be read. Please choose it again.');
         }
-        setCharacterPortraitUri(
-          `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`,
+        sourceUri = `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`;
+      }
+
+      const manipulator = ImageManipulator.manipulate(sourceUri);
+      if (Math.max(asset.width, asset.height) > 512) {
+        manipulator.resize(
+          asset.width >= asset.height ? { width: 512 } : { height: 512 },
         );
+      }
+      const renderedImage = await manipulator.renderAsync();
+      const resizedImage = await renderedImage.saveAsync({
+        format: SaveFormat.JPEG,
+        compress: 0.75,
+        base64: Platform.OS === 'web',
+      });
+      if (Platform.OS === 'web') {
+        if (!resizedImage.base64) {
+          throw new Error('The portrait could not be resized. Please choose it again.');
+        }
+        setCharacterPortraitUri(`data:image/jpeg;base64,${resizedImage.base64}`);
       } else {
-        setCharacterPortraitUri(asset.uri);
+        setCharacterPortraitUri(resizedImage.uri);
       }
       setCharacterPortraitPresetId(null);
     } catch (error) {
@@ -780,7 +798,16 @@ export default function CampaignDetailScreen() {
       setCharacterPortraitPresetId(null);
       setIsCharacterModalVisible(false);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Character could not be saved.');
+      const isQuotaError =
+        error instanceof Error &&
+        /quota|storage|full|exceed/i.test(`${error.name} ${error.message}`);
+      setActionError(
+        isQuotaError
+          ? 'Not enough storage to save this character. Try a smaller portrait or remove unused characters or campaigns.'
+          : error instanceof Error
+            ? error.message
+            : 'Character could not be saved.',
+      );
     } finally {
       setIsSavingCharacter(false);
     }
@@ -6898,9 +6925,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 12,
     marginTop: 16,
   },
   initiativeValue: {
+    flexShrink: 0,
+    minWidth: 44,
+    paddingRight: 4,
+    textAlign: 'right',
     color: '#E8B95F',
     fontFamily: 'serif',
     fontSize: 20,
